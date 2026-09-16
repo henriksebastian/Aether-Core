@@ -1,10 +1,11 @@
-import React from 'react';
-import { OrderBookL2, PriceLevel } from '../types/market';
+import React, { useState } from 'react';
+import { OrderBookL2, MarketTick } from '../types/market';
 import { L3SimulationState } from '../ingestion/synthetic_l3';
-import { AlertTriangle, Clock, ShieldCheck } from 'lucide-react';
+import { ShieldCheck, AlertTriangle } from 'lucide-react';
 
 interface OrderBookDOMProps {
   orderBook: OrderBookL2 | null;
+  recentTrades: MarketTick[];
   microPrice: number;
   queuePriority: number;
   l3State: L3SimulationState | null;
@@ -13,131 +14,206 @@ interface OrderBookDOMProps {
 
 export const OrderBookDOM: React.FC<OrderBookDOMProps> = ({
   orderBook,
+  recentTrades,
   microPrice,
   queuePriority,
   l3State,
   activePersona,
 }) => {
+  const [tickSize, setTickSize] = useState<'0.5' | '1.0' | '5.0'>('0.5');
+
   if (!orderBook) {
     return (
-      <div className="w-80 h-full border-l border-white/10 bg-[#06090e] p-4 flex items-center justify-center text-xs font-mono text-gray-500">
+      <div className="w-80 h-full border-l border-[#1b2232] bg-[#090e18] p-4 flex items-center justify-center text-[11px] font-mono text-[#64748b]">
         Syncing Market Depth...
       </div>
     );
   }
 
-  const { bids, asks, bestBid, bestAsk, spread, midPrice } = orderBook;
-  const maxBidQty = Math.max(...bids.slice(0, 10).map((b) => b.quantity), 1);
-  const maxAskQty = Math.max(...asks.slice(0, 10).map((a) => a.quantity), 1);
+  const { bids, asks, spread, midPrice } = orderBook;
+  const maxAskQty = Math.max(...asks.slice(0, 8).map((a) => a.quantity), 1);
+  const maxBidQty = Math.max(...bids.slice(0, 8).map((b) => b.quantity), 1);
 
-  // If Micro-Scalper, show maximum depth and simulated L3 queue details
-  const isScalper = activePersona === 'Micro-Scalper';
+  // Cumulative ask volume
+  let cumAsk = 0;
+  const asksWithCum = asks.slice(0, 8).map((a) => {
+    cumAsk += a.quantity;
+    return { ...a, cum: cumAsk };
+  });
+
+  // Cumulative bid volume
+  let cumBid = 0;
+  const bidsWithCum = bids.slice(0, 8).map((b) => {
+    cumBid += b.quantity;
+    return { ...b, cum: cumBid };
+  });
+
+  const totalDepth = cumAsk + cumBid;
+  const bidRatio = totalDepth > 0 ? (cumBid / totalDepth) * 100 : 50;
 
   return (
-    <div className="w-80 h-full border-l border-white/10 bg-[#06090e] flex flex-col font-mono text-[11px] select-none">
-      {/* Ladder Header */}
-      <div className="p-2.5 border-b border-white/10 bg-[#0b1018] flex items-center justify-between">
-        <span className="font-display font-bold text-xs text-white">L2 DEPTH / L3 QUEUE</span>
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-gray-400">Prio:</span>
-          <span className="text-cyan font-bold">{(queuePriority * 100).toFixed(0)}%</span>
+    <div className="w-80 h-full border-l border-[#1b2232] bg-[#090e18] flex flex-col font-mono text-[11px] select-none shrink-0">
+      {/* 1. L2 DOM Header */}
+      <div className="h-7 bg-[#0e131d] border-b border-[#1b2232] flex items-center justify-between px-2.5 text-[10px]">
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-[#dee2f1] uppercase">ORDER BOOK (L2 DOM)</span>
+          <span className="text-[#64748b]">Prio: {(queuePriority * 100).toFixed(0)}%</span>
+        </div>
+        <div className="flex items-center gap-1">
+          {(['0.5', '1.0', '5.0'] as const).map((sz) => (
+            <button
+              key={sz}
+              onClick={() => setTickSize(sz)}
+              className={`px-1.5 py-0.2 border text-[9px] transition-colors ${
+                tickSize === sz
+                  ? 'bg-[#1b202a] text-[#dee2f1] border-[#06b6d4]'
+                  : 'text-[#64748b] border-[#1b2232] hover:text-[#94a3b8]'
+              }`}
+            >
+              {sz}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Queue Priority Progress Bar */}
-      <div className="h-1 bg-black/50 w-full overflow-hidden">
-        <div
-          className="h-full bg-cyan transition-all duration-300"
-          style={{ width: `${Math.round(queuePriority * 100)}%` }}
-        />
+      {/* 2. Column Headers */}
+      <div className="grid grid-cols-3 h-5 bg-[#0e131d] border-b border-[#1b2232] px-2 text-[9px] text-[#64748b] items-center">
+        <div>PRICE (USDT)</div>
+        <div className="text-right">SIZE (BTC)</div>
+        <div className="text-right">TOTAL (CUM)</div>
       </div>
 
-      {/* Asks (Red) */}
-      <div className="flex-1 overflow-hidden flex flex-col justify-end p-1">
-        {asks
-          .slice(0, isScalper ? 10 : 7)
-          .reverse()
-          .map((level, idx) => {
-            const depthPct = (level.quantity / maxAskQty) * 100;
-            return (
-              <div
-                key={`ask-${idx}`}
-                className="relative flex items-center justify-between px-2 py-0.5 my-0.5 rounded overflow-hidden"
-              >
-                <div
-                  className="absolute right-0 top-0 bottom-0 depth-bar-ask"
-                  style={{ width: `${depthPct}%` }}
-                />
-                <span className="relative z-10 text-rose font-medium">{level.price.toFixed(2)}</span>
-                <span className="relative z-10 text-gray-400">{level.quantity.toFixed(3)}</span>
-              </div>
-            );
-          })}
-      </div>
-
-      {/* Spread & Micro-Price Equilibrium Bar */}
-      <div className="px-3 py-2 bg-[#0b1018] border-y border-white/10 flex flex-col gap-1">
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-gray-400">SPREAD:</span>
-          <span className="text-white font-bold">{spread.toFixed(2)}</span>
-          <span className="text-[10px] text-cyan">µP: {microPrice.toFixed(2)}</span>
-        </div>
-        <div className="h-1 bg-white/10 rounded-full overflow-hidden flex">
-          <div
-            className="bg-green transition-all"
-            style={{ width: `${Math.min(90, Math.max(10, ((microPrice - bestBid) / spread) * 100))}%` }}
-          />
-          <div className="flex-1 bg-rose" />
-        </div>
-      </div>
-
-      {/* Bids (Green) */}
-      <div className="flex-1 overflow-hidden p-1">
-        {bids.slice(0, isScalper ? 10 : 7).map((level, idx) => {
-          const depthPct = (level.quantity / maxBidQty) * 100;
+      {/* 3. L2 DOM Asks Ladder (Red) */}
+      <div className="flex-1 flex flex-col justify-end overflow-hidden divide-y divide-[#1b2232]/20">
+        {asksWithCum.reverse().map((level, idx) => {
+          const depthPct = (level.quantity / maxAskQty) * 100;
           return (
             <div
-              key={`bid-${idx}`}
-              className="relative flex items-center justify-between px-2 py-0.5 my-0.5 rounded overflow-hidden"
+              key={`ask-${idx}`}
+              className="relative grid grid-cols-3 px-2 py-0.5 items-center hover:bg-[#141a26] transition-colors"
             >
               <div
-                className="absolute right-0 top-0 bottom-0 depth-bar-bid"
+                className="absolute inset-y-0 right-0 bg-[#f23645]/15 pointer-events-none"
                 style={{ width: `${depthPct}%` }}
               />
-              <span className="relative z-10 text-green font-medium">{level.price.toFixed(2)}</span>
-              <span className="relative z-10 text-gray-400">{level.quantity.toFixed(3)}</span>
+              <span className="relative z-10 text-[#f23645] font-medium">{level.price.toFixed(2)}</span>
+              <span className="relative z-10 text-right text-[#dee2f1]">{level.quantity.toFixed(3)}</span>
+              <span className="relative z-10 text-right text-[#64748b]">{level.cum.toFixed(3)}</span>
             </div>
           );
         })}
       </div>
 
-      {/* Simulated L3 Order Queue & Spoofing Monitor */}
-      <div className="p-2.5 border-t border-white/10 bg-[#080d14] flex flex-col gap-1.5 text-[10px]">
+      {/* 4. Pinned Spread & Equilibrium Bar */}
+      <div className="py-1 px-2.5 bg-[#0e131d] border-y border-[#1b2232] flex flex-col gap-1 text-[10px]">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1 text-amber">
-            <Clock className="w-3 h-3" />
-            <span className="font-bold">Simulated L3 Queue</span>
-          </div>
-          <span className="text-gray-400">{l3State?.simulatedQueueDepth ?? 24} orders</span>
+          <span className="text-[#64748b]">
+            SPREAD: <strong className="text-[#089981]">${spread.toFixed(2)}</strong>
+          </span>
+          <span className="text-[#dee2f1] font-bold">${midPrice.toFixed(2)}</span>
+          <span className="text-[#06b6d4]">µP: {microPrice.toFixed(2)}</span>
         </div>
+        <div className="flex items-center justify-between text-[9px] text-[#64748b]">
+          <span>IMBALANCE: {bidRatio.toFixed(1)}% BID</span>
+          <span>{(100 - bidRatio).toFixed(1)}% ASK</span>
+        </div>
+        <div className="h-1 bg-[#1b2232] overflow-hidden flex">
+          <div
+            className="bg-[#089981] transition-all duration-150"
+            style={{ width: `${bidRatio}%` }}
+          />
+          <div
+            className="bg-[#f23645] transition-all duration-150"
+            style={{ width: `${100 - bidRatio}%` }}
+          />
+        </div>
+      </div>
 
-        <div className="flex items-center justify-between bg-black/40 p-1.5 rounded border border-white/5">
-          <span className="text-gray-400">Spoofing Risk:</span>
-          <div className="flex items-center gap-1">
-            {(l3State?.spoofingRiskIndex ?? 0.12) > 0.5 ? (
-              <AlertTriangle className="w-3 h-3 text-rose animate-pulse" />
-            ) : (
-              <ShieldCheck className="w-3 h-3 text-green" />
-            )}
-            <span
-              className={`font-bold ${
-                (l3State?.spoofingRiskIndex ?? 0.12) > 0.5 ? 'text-rose' : 'text-green'
-              }`}
+      {/* 5. L2 DOM Bids Ladder (Green) */}
+      <div className="flex-1 flex flex-col overflow-hidden divide-y divide-[#1b2232]/20">
+        {bidsWithCum.map((level, idx) => {
+          const depthPct = (level.quantity / maxBidQty) * 100;
+          return (
+            <div
+              key={`bid-${idx}`}
+              className="relative grid grid-cols-3 px-2 py-0.5 items-center hover:bg-[#141a26] transition-colors"
             >
-              {((l3State?.spoofingRiskIndex ?? 0.12) * 100).toFixed(0)}%
-            </span>
-          </div>
+              <div
+                className="absolute inset-y-0 right-0 bg-[#089981]/15 pointer-events-none"
+                style={{ width: `${depthPct}%` }}
+              />
+              <span className="relative z-10 text-[#089981] font-medium">{level.price.toFixed(2)}</span>
+              <span className="relative z-10 text-right text-[#dee2f1]">{level.quantity.toFixed(3)}</span>
+              <span className="relative z-10 text-right text-[#64748b]">{level.cum.toFixed(3)}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 6. Live Real-Time Trade Tape (Time & Sales) */}
+      <div className="h-44 border-t border-[#1b2232] bg-[#0e131d] flex flex-col">
+        <div className="h-5 bg-[#090e18] border-b border-[#1b2232] px-2 flex items-center justify-between text-[9px] text-[#64748b]">
+          <span className="font-bold text-[#dee2f1]">TIME & SALES (TAPE)</span>
+          <span>{recentTrades.length} TICKS</span>
         </div>
+        <div className="grid grid-cols-4 h-4 bg-[#0e131d] px-2 text-[8px] text-[#64748b] items-center border-b border-[#1b2232]">
+          <div>TIME</div>
+          <div className="text-right">PRICE</div>
+          <div className="text-right">SIZE</div>
+          <div className="text-right">SIDE</div>
+        </div>
+        <div className="flex-1 overflow-y-auto divide-y divide-[#1b2232]/20 text-[10px]">
+          {recentTrades.slice(0, 15).map((t, idx) => {
+            const d = new Date(t.timestamp);
+            const timeStr = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`;
+            const isBuy = t.side === 'buy';
+            const isWhale = t.quantity >= 3.0;
+
+            return (
+              <div
+                key={`trade-${idx}-${t.timestamp}`}
+                className={`grid grid-cols-4 px-2 py-0.5 items-center ${
+                  isWhale ? 'bg-[#06b6d4]/10 font-bold' : 'hover:bg-[#141a26]'
+                }`}
+              >
+                <span className="text-[#64748b] text-[9px]">{timeStr}</span>
+                <span className={`text-right ${isBuy ? 'text-[#089981]' : 'text-[#f23645]'}`}>
+                  {t.price.toFixed(2)}
+                </span>
+                <span className="text-right text-[#dee2f1]">{t.quantity.toFixed(3)}</span>
+                <div className="text-right">
+                  <span
+                    className={`px-1 py-0.2 text-[8px] font-bold ${
+                      isBuy ? 'bg-[#089981]/20 text-[#089981]' : 'bg-[#f23645]/20 text-[#f23645]'
+                    }`}
+                  >
+                    {isBuy ? 'BUY' : 'SELL'}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 7. Bottom Simulated L3 Queue & Spoofing Monitor Strip */}
+      <div className="p-2 border-t border-[#1b2232] bg-[#090e18] flex items-center justify-between text-[10px]">
+        <div className="flex items-center gap-1.5">
+          {(l3State?.spoofingRiskIndex ?? 0.12) > 0.5 ? (
+            <AlertTriangle className="w-3.5 h-3.5 text-[#f23645] animate-pulse" />
+          ) : (
+            <ShieldCheck className="w-3.5 h-3.5 text-[#089981]" />
+          )}
+          <span className="text-[#64748b]">SPOOF RISK:</span>
+          <span
+            className={`font-bold ${
+              (l3State?.spoofingRiskIndex ?? 0.12) > 0.5 ? 'text-[#f23645]' : 'text-[#089981]'
+            }`}
+          >
+            {((l3State?.spoofingRiskIndex ?? 0.12) * 100).toFixed(0)}%
+          </span>
+        </div>
+        <span className="text-[#64748b] text-[9px]">L3 QUEUE: {l3State?.simulatedQueueDepth ?? 24} ORDERS</span>
       </div>
     </div>
   );

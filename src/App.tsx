@@ -103,7 +103,7 @@ export const App: React.FC = () => {
   const activePersona = telemetry.activePersona;
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#06090e] text-slate-100 overflow-hidden font-sans">
+    <div className="flex flex-col h-screen w-screen bg-[#090e18] text-[#dee2f1] overflow-hidden font-mono">
       {/* Header with Telemetry, Connection & Persona Badge */}
       <Header
         telemetry={telemetry}
@@ -119,18 +119,21 @@ export const App: React.FC = () => {
 
       {/* Main Workspace Body */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Center: Multi-Plane WebGPU Canvas Viewport */}
+        {/* Center: Candlestick & Multi-Plane WebGPU Canvas Viewport */}
         <MainViewport
           orderBook={snapshot?.orderBook ?? null}
+          recentTrades={snapshot?.recentTrades ?? []}
           microPrice={snapshot?.wasmMetrics.microPrice ?? 0}
           activePersona={activePersona}
           hawkesIntensity={snapshot?.wasmMetrics.hawkesIntensity ?? 0.45}
+          ofi={snapshot?.wasmMetrics.ofi ?? 0}
           gpuAllocation={telemetry.gpuThreadAllocation}
         />
 
-        {/* Right Dock: Order Book DOM & Synthetic L3 Queue */}
+        {/* Right Dock: Order Book DOM & Real-Time Trade Tape */}
         <OrderBookDOM
           orderBook={snapshot?.orderBook ?? null}
+          recentTrades={snapshot?.recentTrades ?? []}
           microPrice={snapshot?.wasmMetrics.microPrice ?? 0}
           queuePriority={snapshot?.wasmMetrics.queuePriority ?? 0.5}
           l3State={snapshot?.l3State ?? null}
