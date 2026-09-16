@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { MarketTick, OrderBookL2 } from '../types/market';
+import { fetchBinanceHistoricalKlines } from '../ingestion/binance_rest';
+import { computeMonteCarloForecast, MonteCarloForecast } from '../indicators/monte_carlo';
 
 export interface Candle {
   time: number; // timestamp in ms
@@ -13,6 +15,7 @@ export interface Candle {
 }
 
 interface CandlestickChartProps {
+  symbol?: string;
   orderBook: OrderBookL2 | null;
   recentTrades: MarketTick[];
   microPrice: number;
@@ -35,6 +38,7 @@ const TIMEFRAME_MS: Record<Timeframe, number> = {
 };
 
 export const CandlestickChart: React.FC<CandlestickChartProps> = ({
+  symbol = 'BTCUSDT',
   orderBook,
   recentTrades,
   microPrice,
@@ -59,48 +63,70 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
   const [showEMA21, setShowEMA21] = useState(true);
   const [showEMA55, setShowEMA55] = useState(true);
   const [showVolume, setShowVolume] = useState(true);
+  const [showMonteCarlo, setShowMonteCarlo] = useState(true);
   const [showPositionMarker, setShowPositionMarker] = useState(true);
 
-  // Base price reference for realistic pre-population
-  const basePrice = orderBook?.midPrice || 64820.0;
+  // Monte Carlo 3,000-Path Forecast State
+  const [mcForecast, setMcForecast] = useState<MonteCarloForecast | null>(null);
 
-  // Initialize historical candles once
+  // Base price reference for realistic fallback pre-population
+  const fallbackBase = orderBook?.midPrice || (symbol === 'ETHUSDT' ? 2420 : symbol === 'SOLUSDT' ? 98 : 76200);
+
+  // Fetch real Binance klines whenever symbol or timeframe changes
   useEffect(() => {
-    const count = 75;
-    const tfMs = TIMEFRAME_MS[timeframe];
-    const now = Date.now();
-    const initialCandles: Candle[] = [];
+    let isMounted = true;
 
-    let currentPrice = basePrice * 0.985; // slight upward drift
-    const startTime = now - count * tfMs;
+    const loadKlines = async () => {
+      const realKlines = await fetchBinanceHistoricalKlines(symbol, timeframe, 85);
+      if (!isMounted) return;
 
-    for (let i = 0; i < count; i++) {
-      const cTime = startTime + i * tfMs;
-      const volatility = currentPrice * 0.0018;
-      const change = (Math.random() - 0.48) * volatility;
-      const open = currentPrice;
-      const close = open + change;
-      const high = Math.max(open, close) + Math.random() * volatility * 0.8;
-      const low = Math.min(open, close) - Math.random() * volatility * 0.8;
-      const volume = Math.round((2.5 + Math.random() * 8.5) * 100) / 100;
-      const isBuy = close >= open;
+      if (realKlines && realKlines.length > 0) {
+        setCandles(realKlines);
+      } else {
+        // Fallback: Generate synthetic candles if offline/rate-limited
+        const count = 75;
+        const tfMs = TIMEFRAME_MS[timeframe];
+        const now = Date.now();
+        const initialCandles: Candle[] = [];
 
-      initialCandles.push({
-        time: cTime,
-        open: Math.round(open * 100) / 100,
-        high: Math.round(high * 100) / 100,
-        low: Math.round(low * 100) / 100,
-        close: Math.round(close * 100) / 100,
-        volume,
-        buyVolume: isBuy ? volume * 0.7 : volume * 0.3,
-        sellVolume: isBuy ? volume * 0.3 : volume * 0.7,
-      });
+        let currentPrice = fallbackBase * 0.985;
+        const startTime = now - count * tfMs;
 
-      currentPrice = close;
-    }
+        for (let i = 0; i < count; i++) {
+          const cTime = startTime + i * tfMs;
+          const volatility = currentPrice * 0.0018;
+          const change = (Math.random() - 0.48) * volatility;
+          const open = currentPrice;
+          const close = open + change;
+          const high = Math.max(open, close) + Math.random() * volatility * 0.8;
+          const low = Math.min(open, close) - Math.random() * volatility * 0.8;
+          const volume = Math.round((2.5 + Math.random() * 8.5) * 100) / 100;
+          const isBuy = close >= open;
 
-    setCandles(initialCandles);
-  }, [timeframe]);
+          initialCandles.push({
+            time: cTime,
+            open: Math.round(open * 100) / 100,
+            high: Math.round(high * 100) / 100,
+            low: Math.round(low * 100) / 100,
+            close: Math.round(close * 100) / 100,
+            volume,
+            buyVolume: isBuy ? volume * 0.7 : volume * 0.3,
+            sellVolume: isBuy ? volume * 0.3 : volume * 0.7,
+          });
+
+          currentPrice = close;
+        }
+
+        setCandles(initialCandles);
+      }
+    };
+
+    loadKlines();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [symbol, timeframe]);
 
   // Aggregate incoming live ticks into the active candle
   const lastProcessedTradeRef = useRef<number>(0);
@@ -129,7 +155,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
           lastCandle.sellVolume += latestTrade.quantity;
         }
         copy[copy.length - 1] = lastCandle;
-      } else if (latestTrade.timestamp > lastCandle.time + tfMs) {
+      } else if (currentBucket > lastCandle.time) {
         // Open a new candle
         const newCandle: Candle = {
           time: currentBucket,
@@ -187,6 +213,25 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
     return { ema21, ema55, vwap };
   }, [candles]);
 
+  // Compute Monte Carlo 3,000-Path Price Cone Forecast
+  useEffect(() => {
+    if (candles.length === 0) return;
+    const latestPrice = candles[candles.length - 1].close;
+    const forecast = computeMonteCarloForecast(
+      latestPrice,
+      microPrice,
+      ofi,
+      candles,
+      symbol,
+      timeframe,
+      18,
+      3000
+    );
+    if (forecast) {
+      setMcForecast(forecast);
+    }
+  }, [candles, symbol, timeframe, ofi, microPrice]);
+
   // Canvas Rendering Pipeline
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -212,7 +257,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
     ctx.fillRect(0, 0, width, height);
 
     // Padding parameters
-    const rightAxisWidth = 68;
+    const rightAxisWidth = 72;
     const bottomAxisHeight = 22;
     const chartWidth = width - rightAxisWidth;
     const chartHeight = height - bottomAxisHeight;
@@ -228,6 +273,14 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       minPrice = Math.min(minPrice, c.low);
       maxPrice = Math.max(maxPrice, c.high);
       maxVolume = Math.max(maxVolume, c.volume);
+    }
+
+    // Expand price bounds for Monte Carlo forecast cone
+    if (showMonteCarlo && mcForecast) {
+      for (let t = 0; t < mcForecast.steps; t++) {
+        minPrice = Math.min(minPrice, mcForecast.p05[t]);
+        maxPrice = Math.max(maxPrice, mcForecast.p95[t]);
+      }
     }
 
     if (maxPrice <= minPrice) {
@@ -249,9 +302,11 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       return chartHeight - h;
     };
 
-    // Calculate Candle Geometry
+    // Calculate Candle Geometry (with future slots reserved for Monte Carlo)
     const n = candles.length;
-    const candleSlotWidth = chartWidth / n;
+    const futureSlots = showMonteCarlo && mcForecast ? mcForecast.steps : 0;
+    const totalSlots = n + futureSlots;
+    const candleSlotWidth = chartWidth / (totalSlots || 1);
     const candleBodyWidth = Math.max(3, candleSlotWidth * 0.72);
 
     // 2. Draw Horizontal Gridlines & Price Scale
@@ -291,6 +346,23 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       ctx.fillText(timeStr, x, height - 6);
     }
 
+    // Future Time Grid Divider (boundary between historical and Monte Carlo prediction)
+    if (showMonteCarlo && futureSlots > 0) {
+      const forecastStartX = (n - 1) * candleSlotWidth + candleSlotWidth / 2;
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.25)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(forecastStartX, 0);
+      ctx.lineTo(forecastStartX, chartHeight);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      ctx.fillStyle = 'rgba(6, 182, 212, 0.6)';
+      ctx.font = '9px "JetBrains Mono", monospace';
+      ctx.fillText('FORECAST', forecastStartX + 28, 12);
+    }
+
     // 4. Draw Volume Histogram Bars
     if (showVolume) {
       for (let i = 0; i < n; i++) {
@@ -308,7 +380,122 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       }
     }
 
-    // 5. Draw Technical Indicator Overlays
+    // 5. Draw 3,000-Path Monte Carlo Quantile Price Cone Projection
+    if (showMonteCarlo && mcForecast && mcForecast.p50.length > 0) {
+      const startX = (n - 1) * candleSlotWidth + candleSlotWidth / 2;
+      const latestPrice = candles[candles.length - 1].close;
+      const spotY = priceToY(latestPrice);
+      const steps = mcForecast.steps;
+
+      // A. Outer Quantile Band (P05 to P95 Extreme Volatility Envelope)
+      ctx.beginPath();
+      ctx.moveTo(startX, spotY);
+      for (let t = 0; t < steps; t++) {
+        const x = startX + (t + 1) * candleSlotWidth;
+        const y = priceToY(mcForecast.p95[t]);
+        ctx.lineTo(x, y);
+      }
+      for (let t = steps - 1; t >= 0; t--) {
+        const x = startX + (t + 1) * candleSlotWidth;
+        const y = priceToY(mcForecast.p05[t]);
+        ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(6, 182, 212, 0.05)';
+      ctx.fill();
+
+      // Outer boundary stroke
+      ctx.beginPath();
+      ctx.moveTo(startX, spotY);
+      for (let t = 0; t < steps; t++) {
+        const x = startX + (t + 1) * candleSlotWidth;
+        ctx.lineTo(x, priceToY(mcForecast.p95[t]));
+      }
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.25)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 2]);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(startX, spotY);
+      for (let t = 0; t < steps; t++) {
+        const x = startX + (t + 1) * candleSlotWidth;
+        ctx.lineTo(x, priceToY(mcForecast.p05[t]));
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // B. Inner Quantile Band (P25 to P75 Interquartile High Probability Zone)
+      ctx.beginPath();
+      ctx.moveTo(startX, spotY);
+      for (let t = 0; t < steps; t++) {
+        const x = startX + (t + 1) * candleSlotWidth;
+        const y = priceToY(mcForecast.p75[t]);
+        ctx.lineTo(x, y);
+      }
+      for (let t = steps - 1; t >= 0; t--) {
+        const x = startX + (t + 1) * candleSlotWidth;
+        const y = priceToY(mcForecast.p25[t]);
+        ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(6, 182, 212, 0.12)';
+      ctx.fill();
+
+      // C. Median Expected Trajectory (P50)
+      ctx.beginPath();
+      ctx.moveTo(startX, spotY);
+      for (let t = 0; t < steps; t++) {
+        const x = startX + (t + 1) * candleSlotWidth;
+        const y = priceToY(mcForecast.p50[t]);
+        ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = '#06b6d4';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // D. Terminal TP & SL Horizontal Guidance Lines
+      const endX = startX + steps * candleSlotWidth;
+      const tpY = priceToY(mcForecast.targetTP);
+      const slY = priceToY(mcForecast.targetSL);
+
+      // TP Target Line (Green dashed)
+      ctx.strokeStyle = 'rgba(8, 153, 129, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(endX, tpY);
+      ctx.lineTo(chartWidth, tpY);
+      ctx.stroke();
+
+      // SL Risk Line (Red dashed)
+      ctx.strokeStyle = 'rgba(242, 54, 69, 0.6)';
+      ctx.beginPath();
+      ctx.moveTo(endX, slY);
+      ctx.lineTo(chartWidth, slY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Terminal Right Axis Target Badges
+      ctx.font = 'bold 9px "JetBrains Mono", monospace';
+      ctx.textAlign = 'left';
+
+      // TP Target Label
+      ctx.fillStyle = '#089981';
+      ctx.fillRect(chartWidth + 2, Math.round(tpY) - 7, rightAxisWidth - 4, 14);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(`TP ${mcForecast.targetTP.toFixed(1)}`, chartWidth + 5, Math.round(tpY) + 3);
+
+      // SL Target Label
+      ctx.fillStyle = '#f23645';
+      ctx.fillRect(chartWidth + 2, Math.round(slY) - 7, rightAxisWidth - 4, 14);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(`SL ${mcForecast.targetSL.toFixed(1)}`, chartWidth + 5, Math.round(slY) + 3);
+    }
+
+    // 6. Draw Technical Indicator Overlays
     // EMA 55 (Violet)
     if (showEMA55 && indicatorSeries.ema55.length === n) {
       ctx.beginPath();
@@ -372,7 +559,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       ctx.setLineDash([]);
     }
 
-    // 6. Draw Candlesticks (Bodies & Wicks)
+    // 7. Draw Candlesticks (Bodies & Wicks)
     for (let i = 0; i < n; i++) {
       const c = candles[i];
       const isGreen = c.close >= c.open;
@@ -407,7 +594,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       ctx.strokeRect(bodyX, bodyY, candleBodyWidth, bodyH);
     }
 
-    // 7. Micro-Price Tracer Line (Cyan dashed)
+    // 8. Micro-Price Tracer Line (Cyan dashed)
     if (microPrice > 0) {
       const microY = Math.round(priceToY(microPrice)) + 0.5;
       ctx.beginPath();
@@ -420,7 +607,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       ctx.setLineDash([]);
     }
 
-    // 8. Active Current Price Tag (Snapping on right axis)
+    // 9. Active Current Price Tag (Snapping on right axis)
     const latestCandle = candles[candles.length - 1];
     const curPrice = latestCandle.close;
     const curY = Math.round(priceToY(curPrice));
@@ -443,7 +630,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
     ctx.textAlign = 'center';
     ctx.fillText(curPrice.toFixed(2), chartWidth + rightAxisWidth / 2, curY + 4);
 
-    // 9. Interactive Crosshair Hover
+    // 10. Interactive Crosshair Hover
     if (hoverData && hoverData.x < chartWidth && hoverData.y < chartHeight) {
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
       ctx.lineWidth = 1;
@@ -487,7 +674,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
     }
 
     ctx.restore();
-  }, [candles, showVWAP, showEMA21, showEMA55, showVolume, microPrice, hoverData, indicatorSeries]);
+  }, [candles, showVWAP, showEMA21, showEMA55, showVolume, showMonteCarlo, mcForecast, microPrice, hoverData, indicatorSeries]);
 
   // Handle Mouse Hover & Crosshair Tracking
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -498,14 +685,16 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    const rightAxisWidth = 68;
+    const rightAxisWidth = 72;
     const bottomAxisHeight = 22;
     const chartWidth = canvas.clientWidth - rightAxisWidth;
     const chartHeight = canvas.clientHeight - bottomAxisHeight;
     const priceChartHeight = showVolume ? chartHeight * 0.82 : chartHeight;
 
     if (x >= 0 && x <= chartWidth && y >= 0 && y <= chartHeight) {
-      const candleSlotWidth = chartWidth / candles.length;
+      const futureSlots = showMonteCarlo && mcForecast ? mcForecast.steps : 0;
+      const totalSlots = candles.length + futureSlots;
+      const candleSlotWidth = chartWidth / (totalSlots || 1);
       const idx = Math.min(candles.length - 1, Math.max(0, Math.floor(x / candleSlotWidth)));
       const candle = candles[idx];
 
@@ -515,6 +704,12 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       for (const c of candles) {
         minPrice = Math.min(minPrice, c.low);
         maxPrice = Math.max(maxPrice, c.high);
+      }
+      if (showMonteCarlo && mcForecast) {
+        for (let t = 0; t < mcForecast.steps; t++) {
+          minPrice = Math.min(minPrice, mcForecast.p05[t]);
+          maxPrice = Math.max(maxPrice, mcForecast.p95[t]);
+        }
       }
       const pMargin = (maxPrice - minPrice) * 0.08;
       minPrice -= pMargin;
@@ -554,11 +749,10 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
             <button
               key={tf}
               onClick={() => setTimeframe(tf)}
-              className={`px-1.5 py-0.5 text-[11px] transition-colors ${
-                timeframe === tf
+              className={`px-1.5 py-0.5 text-[11px] transition-colors ${timeframe === tf
                   ? 'bg-[#1b202a] text-[#089981] font-bold border-t-2 border-[#089981]'
                   : 'text-[#94a3b8] hover:text-[#e2e8f0] hover:bg-[#141a26]'
-              }`}
+                }`}
             >
               {tf}
             </button>
@@ -569,42 +763,47 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
           {/* Indicator Quick Toggles */}
           <span className="text-[#64748b] font-medium text-[10px] uppercase tracking-wider">IND:</span>
           <button
+            onClick={() => setShowMonteCarlo((v) => !v)}
+            className={`px-2 py-0.5 text-[10px] font-bold flex items-center gap-1 border transition-colors ${showMonteCarlo
+                ? 'bg-[#1b202a] text-[#06b6d4] border-[#06b6d4]/50'
+                : 'text-[#64748b] border-[#1b2232] hover:text-[#94a3b8]'
+              }`}
+          >
+            ● MC CONE
+          </button>
+          <button
             onClick={() => setShowVWAP((v) => !v)}
-            className={`px-2 py-0.5 text-[10px] font-bold flex items-center gap-1 border transition-colors ${
-              showVWAP
+            className={`px-2 py-0.5 text-[10px] font-bold flex items-center gap-1 border transition-colors ${showVWAP
                 ? 'bg-[#1b202a] text-[#f59e0b] border-[#f59e0b]/50'
                 : 'text-[#64748b] border-[#1b2232] hover:text-[#94a3b8]'
-            }`}
+              }`}
           >
             ● VWAP
           </button>
           <button
             onClick={() => setShowEMA21((v) => !v)}
-            className={`px-2 py-0.5 text-[10px] font-bold flex items-center gap-1 border transition-colors ${
-              showEMA21
+            className={`px-2 py-0.5 text-[10px] font-bold flex items-center gap-1 border transition-colors ${showEMA21
                 ? 'bg-[#1b202a] text-[#06b6d4] border-[#06b6d4]/50'
                 : 'text-[#64748b] border-[#1b2232] hover:text-[#94a3b8]'
-            }`}
+              }`}
           >
             ● EMA 21
           </button>
           <button
             onClick={() => setShowEMA55((v) => !v)}
-            className={`px-2 py-0.5 text-[10px] font-bold flex items-center gap-1 border transition-colors ${
-              showEMA55
+            className={`px-2 py-0.5 text-[10px] font-bold flex items-center gap-1 border transition-colors ${showEMA55
                 ? 'bg-[#1b202a] text-[#8b5cf6] border-[#8b5cf6]/50'
                 : 'text-[#64748b] border-[#1b2232] hover:text-[#94a3b8]'
-            }`}
+              }`}
           >
             ● EMA 55
           </button>
           <button
             onClick={() => setShowVolume((v) => !v)}
-            className={`px-2 py-0.5 text-[10px] font-bold flex items-center gap-1 border transition-colors ${
-              showVolume
+            className={`px-2 py-0.5 text-[10px] font-bold flex items-center gap-1 border transition-colors ${showVolume
                 ? 'bg-[#1b202a] text-[#089981] border-[#089981]/50'
                 : 'text-[#64748b] border-[#1b2232] hover:text-[#94a3b8]'
-            }`}
+              }`}
           >
             ● VOL
           </button>
@@ -616,31 +815,28 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
             <div className="flex items-center bg-[#090e18] border border-[#1b2232] p-0.5">
               <button
                 onClick={() => onViewModeChange('candlestick')}
-                className={`px-1.5 py-0.2 text-[9px] font-bold ${
-                  viewMode === 'candlestick'
+                className={`px-1.5 py-0.2 text-[9px] font-bold ${viewMode === 'candlestick'
                     ? 'bg-[#1b202a] text-[#089981] border-b border-[#089981]'
                     : 'text-[#64748b] hover:text-[#dee2f1]'
-                }`}
+                  }`}
               >
                 CANDLE
               </button>
               <button
                 onClick={() => onViewModeChange('heatmap')}
-                className={`px-1.5 py-0.2 text-[9px] font-bold ${
-                  viewMode === 'heatmap'
+                className={`px-1.5 py-0.2 text-[9px] font-bold ${viewMode === 'heatmap'
                     ? 'bg-[#1b202a] text-[#06b6d4] border-b border-[#06b6d4]'
                     : 'text-[#64748b] hover:text-[#dee2f1]'
-                }`}
+                  }`}
               >
                 HEATMAP
               </button>
               <button
                 onClick={() => onViewModeChange('split')}
-                className={`px-1.5 py-0.2 text-[9px] font-bold ${
-                  viewMode === 'split'
+                className={`px-1.5 py-0.2 text-[9px] font-bold ${viewMode === 'split'
                     ? 'bg-[#1b202a] text-[#8b5cf6] border-b border-[#8b5cf6]'
                     : 'text-[#64748b] hover:text-[#dee2f1]'
-                }`}
+                  }`}
               >
                 SPLIT
               </button>
@@ -648,13 +844,12 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
           )}
           <button
             onClick={() => setShowPositionMarker((v) => !v)}
-            className={`px-1.5 py-0.2 border text-[9px] ${
-              showPositionMarker
-                ? 'bg-[#089981]/10 text-[#089981] border-[#089981]/40'
+            className={`px-1.5 py-0.2 border text-[9px] font-bold ${showPositionMarker
+                ? 'bg-[#089981]/15 text-[#089981] border-[#089981]/50'
                 : 'text-[#64748b] border-[#1b2232]'
-            }`}
+              }`}
           >
-            TAGS {showPositionMarker ? 'ON' : 'OFF'}
+            SIGNALS {showPositionMarker ? 'ON' : 'OFF'}
           </button>
           <span className="text-[#64748b]">
             SPREAD: <strong className="text-[#089981] font-mono">${(orderBook?.spread || 0.5).toFixed(2)}</strong>
@@ -670,7 +865,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
         {activeDisplayCandle ? (
           <div className="flex items-center gap-3">
             <span className="text-[#e2e8f0] font-semibold tracking-wide">
-              BTC/USDT PERP · {timeframe}
+              {symbol.replace('USDT', '/USDT')} PERP · {timeframe}
             </span>
             <span className="text-[#64748b]">
               O <strong className="text-[#dee2f1] font-normal">{activeDisplayCandle.open.toFixed(2)}</strong>
@@ -692,7 +887,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
               </strong>
             </span>
             <span className="text-[#64748b]">
-              VOL <strong className="text-[#06b6d4] font-normal">{activeDisplayCandle.volume.toFixed(2)} BTC</strong>
+              VOL <strong className="text-[#06b6d4] font-normal">{activeDisplayCandle.volume.toFixed(2)} {symbol.replace('USDT', '')}</strong>
             </span>
           </div>
         ) : (
@@ -700,6 +895,11 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
         )}
 
         <div className="flex items-center gap-3 text-[10px]">
+          {showMonteCarlo && mcForecast && (
+            <span className="text-[#06b6d4] font-bold">
+              MC P50: ${mcForecast.p50[mcForecast.p50.length - 1]?.toFixed(1)}
+            </span>
+          )}
           {showVWAP && lastVwap && (
             <span className="text-[#f59e0b]">VWAP: {lastVwap.toFixed(2)}</span>
           )}
@@ -721,22 +921,82 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
           className="w-full h-full block cursor-crosshair"
         />
 
-        {/* Real-time Visual Execution Overlay Badges */}
-        {showPositionMarker && (
-          <>
-            {/* Long Entry Fill Tag */}
-            <div className="absolute left-16 top-24 bg-[#0e131d]/90 border border-[#089981] px-2 py-0.5 flex items-center gap-1.5 shadow-md pointer-events-none">
-              <span className="w-1.5 h-1.5 bg-[#089981]" />
-              <span className="text-[#089981] font-bold text-[10px]">LONG 5.0 BTC @ $63,950.00</span>
-              <span className="text-[#089981] font-mono text-[10px]">(PnL +$4,357.50 / +6.81%)</span>
+        {/* Real-time Visual Execution Overlay Badges & Quant Sizing Card */}
+        {showPositionMarker && mcForecast && (
+          <div className="absolute left-3 top-3 bg-[#0e131d]/95 border border-[#1b2232] shadow-2xl p-2.5 font-mono text-[10px] w-64 select-none backdrop-blur-sm pointer-events-auto z-10">
+            {/* Header / Signal Indicator */}
+            <div className="flex items-center justify-between border-b border-[#1b2232] pb-1.5 mb-2">
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    mcForecast.signal.includes('BUY')
+                      ? 'bg-[#089981] animate-pulse'
+                      : mcForecast.signal.includes('SELL')
+                      ? 'bg-[#f23645] animate-pulse'
+                      : 'bg-[#f59e0b]'
+                  }`}
+                />
+                <span className="text-[#64748b] font-bold text-[9px]">SIGNAL:</span>
+                <span
+                  className={`font-bold tracking-wider ${
+                    mcForecast.signal.includes('BUY')
+                      ? 'text-[#089981]'
+                      : mcForecast.signal.includes('SELL')
+                      ? 'text-[#f23645]'
+                      : 'text-[#f59e0b]'
+                  }`}
+                >
+                  {mcForecast.signal}
+                </span>
+              </div>
+              <span className="text-[9px] px-1 bg-[#141a26] text-[#06b6d4] border border-[#1b2232]">
+                {mcForecast.confidence}% CONF
+              </span>
             </div>
 
-            {/* Take Profit Target Level */}
-            <div className="absolute right-24 top-10 bg-[#0e131d]/90 border border-[#06b6d4] px-2 py-0.5 flex items-center gap-1.5 shadow-md pointer-events-none">
-              <span className="text-[#06b6d4] font-bold text-[10px]">TP TARGET #1: $65,800.00</span>
-              <span className="text-[#64748b] text-[9px]">[LIMIT SELL 2.5 BTC]</span>
+            {/* Sizing & Capital Allocation */}
+            <div className="space-y-1 text-[10px]">
+              <div className="flex justify-between">
+                <span className="text-[#64748b]">REC. SIZING:</span>
+                <span className="text-[#dee2f1] font-bold">
+                  {mcForecast.recommendedSize.quantity} {mcForecast.recommendedSize.unit}{' '}
+                  <span className="text-[#64748b] font-normal">
+                    (${mcForecast.recommendedSize.notionalUSD.toLocaleString()})
+                  </span>
+                </span>
+              </div>
+
+              <div className="flex justify-between">
+                <span className="text-[#64748b]">ENTRY (SPOT):</span>
+                <span className="text-[#dee2f1] font-mono">
+                  ${mcForecast.spotPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+
+              <div className="flex justify-between text-[#089981]">
+                <span>TARGET (TP P75):</span>
+                <span className="font-bold font-mono">
+                  ${mcForecast.targetTP.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
+                  <span className="text-[9px]">(+{mcForecast.expectedGainPct.toFixed(2)}%)</span>
+                </span>
+              </div>
+
+              <div className="flex justify-between text-[#f23645]">
+                <span>STOP LOSS (P25):</span>
+                <span className="font-bold font-mono">
+                  ${mcForecast.targetSL.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
+                  <span className="text-[9px]">(-{mcForecast.riskLossPct.toFixed(2)}%)</span>
+                </span>
+              </div>
+
+              <div className="flex justify-between pt-1 border-t border-[#1b2232] text-[9px]">
+                <span className="text-[#64748b]">R:R RATIO:</span>
+                <span className="text-[#06b6d4] font-bold">{mcForecast.riskRewardRatio.toFixed(2)} : 1</span>
+                <span className="text-[#64748b]">WIN PROB:</span>
+                <span className="text-[#089981] font-bold">{(mcForecast.winProbability * 100).toFixed(0)}%</span>
+              </div>
             </div>
-          </>
+          </div>
         )}
       </div>
     </div>

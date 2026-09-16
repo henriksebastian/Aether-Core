@@ -294,3 +294,37 @@ button {
 input {
   outline: none;
 }
+
+/* Modal Overlay & Dialog */
+.modal-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  background-color: rgba(6, 9, 14, 0.88) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  z-index: 9999 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 1.5rem !important;
+}
+
+.modal-dialog {
+  width: 90vw !important;
+  max-width: 1120px !important;
+  height: 85vh !important;
+  max-height: 860px !important;
+  background-color: #0e131d !important;
+  border: 1px solid #1b2232 !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.95), 0 0 0 1px #1b2232 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+

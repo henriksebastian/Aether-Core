@@ -121,6 +121,7 @@ export const App: React.FC = () => {
       <div className="flex-1 flex overflow-hidden">
         {/* Center: Candlestick & Multi-Plane WebGPU Canvas Viewport */}
         <MainViewport
+          symbol={symbol}
           orderBook={snapshot?.orderBook ?? null}
           recentTrades={snapshot?.recentTrades ?? []}
           microPrice={snapshot?.wasmMetrics.microPrice ?? 0}

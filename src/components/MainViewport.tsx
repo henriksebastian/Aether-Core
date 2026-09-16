@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 
 interface MainViewportProps {
+  symbol?: string;
   orderBook: OrderBookL2 | null;
   recentTrades: MarketTick[];
   microPrice: number;
@@ -28,6 +29,7 @@ interface MainViewportProps {
 type ViewMode = 'candlestick' | 'heatmap' | 'split';
 
 export const MainViewport: React.FC<MainViewportProps> = ({
+  symbol = 'BTCUSDT',
   orderBook,
   recentTrades,
   microPrice,
@@ -201,6 +203,7 @@ export const MainViewport: React.FC<MainViewportProps> = ({
         {/* Viewport Content Rendering */}
         {viewMode === 'candlestick' && (
           <CandlestickChart
+            symbol={symbol}
             orderBook={orderBook}
             recentTrades={recentTrades}
             microPrice={microPrice}
@@ -291,6 +294,7 @@ export const MainViewport: React.FC<MainViewportProps> = ({
             <div className="flex-1 flex h-full w-full overflow-hidden">
               <div className="w-1/2 h-full border-r border-[#1b2232]">
                 <CandlestickChart
+                  symbol={symbol}
                   orderBook={orderBook}
                   recentTrades={recentTrades}
                   microPrice={microPrice}

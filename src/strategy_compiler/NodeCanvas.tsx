@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ReactFlow,
   Background,
@@ -11,18 +11,17 @@ import {
 import '@xyflow/react/dist/style.css';
 import { CodeGeneratorService, StrategyGraphRule } from './code_generators';
 import { SnarkProverService, ZKProofPayload } from './zksnark/snark_prover';
-import { Code, ShieldCheck, Play, CheckCircle2, Copy, Terminal } from 'lucide-react';
+import { Code, ShieldCheck, Play, CheckCircle2, Copy, Terminal, X } from 'lucide-react';
 
 const initialNodes: Node[] = [
   {
     id: '1',
-    position: { x: 50, y: 50 },
+    position: { x: 40, y: 45 },
     data: { label: 'Hawkes Intensity > 1.05 (Cascade Detected)' },
     style: {
-      background: 'rgba(11, 16, 24, 0.9)',
-      color: '#00f3ff',
-      border: '1px solid #00f3ff',
-      borderRadius: '6px',
+      background: '#090e18',
+      color: '#06b6d4',
+      border: '1px solid #06b6d4',
       fontSize: '11px',
       fontFamily: 'JetBrains Mono',
       padding: '10px',
@@ -31,56 +30,53 @@ const initialNodes: Node[] = [
   },
   {
     id: '2',
-    position: { x: 320, y: 50 },
-    data: { label: 'Price touches 0.618 Fib Pocket' },
+    position: { x: 300, y: 45 },
+    data: { label: 'Price touches 0.618 Fib Retracement' },
     style: {
-      background: 'rgba(11, 16, 24, 0.9)',
-      color: '#ffb700',
-      border: '1px solid #ffb700',
-      borderRadius: '6px',
+      background: '#090e18',
+      color: '#f59e0b',
+      border: '1px solid #f59e0b',
       fontSize: '11px',
       fontFamily: 'JetBrains Mono',
       padding: '10px',
-      width: 200,
+      width: 210,
     },
   },
   {
     id: '3',
-    position: { x: 570, y: 50 },
-    data: { label: 'Liquidity Gravity Vector > 1.20' },
+    position: { x: 550, y: 45 },
+    data: { label: 'Liquidity Gravity Force G(x) > 1.20' },
     style: {
-      background: 'rgba(11, 16, 24, 0.9)',
-      color: '#9d4edd',
-      border: '1px solid #9d4edd',
-      borderRadius: '6px',
+      background: '#090e18',
+      color: '#8b5cf6',
+      border: '1px solid #8b5cf6',
       fontSize: '11px',
       fontFamily: 'JetBrains Mono',
       padding: '10px',
-      width: 200,
+      width: 210,
     },
   },
   {
     id: '4',
-    position: { x: 820, y: 50 },
-    data: { label: 'EXECUTE: Immediate IOC Buy' },
+    position: { x: 800, y: 45 },
+    data: { label: 'EXECUTE: Immediate IOC Aggressive Buy' },
     style: {
-      background: 'rgba(0, 255, 136, 0.15)',
-      color: '#00ff88',
-      border: '1px solid #00ff88',
-      borderRadius: '6px',
+      background: '#090e18',
+      color: '#089981',
+      border: '1px solid #089981',
       fontSize: '11px',
       fontFamily: 'JetBrains Mono',
       fontWeight: 'bold',
       padding: '10px',
-      width: 180,
+      width: 210,
     },
   },
 ];
 
 const initialEdges: Edge[] = [
-  { id: 'e1-2', source: '1', target: '2', animated: true, style: { stroke: '#00f3ff' } },
-  { id: 'e2-3', source: '2', target: '3', animated: true, style: { stroke: '#ffb700' } },
-  { id: 'e3-4', source: '3', target: '4', animated: true, style: { stroke: '#00ff88' } },
+  { id: 'e1-2', source: '1', target: '2', animated: true, style: { stroke: '#06b6d4', strokeWidth: 2 } },
+  { id: 'e2-3', source: '2', target: '3', animated: true, style: { stroke: '#f59e0b', strokeWidth: 2 } },
+  { id: 'e3-4', source: '3', target: '4', animated: true, style: { stroke: '#089981', strokeWidth: 2 } },
 ];
 
 export const StrategyNodeCompilerModal: React.FC<{
@@ -100,6 +96,18 @@ export const StrategyNodeCompilerModal: React.FC<{
   const [isProving, setIsProving] = useState(false);
   const [proofResult, setProofResult] = useState<ZKProofPayload | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Close on Escape key
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -132,105 +140,143 @@ export const StrategyNodeCompilerModal: React.FC<{
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-6">
-      <div className="w-full max-w-6xl h-[85vh] bg-[#0b1018] border border-white/10 rounded-lg flex flex-col overflow-hidden shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 bg-[#06090e]">
-          <div className="flex items-center gap-3">
-            <Terminal className="w-5 h-5 text-cyan-400 text-cyan" />
-            <span className="font-display font-bold text-sm tracking-wider uppercase text-white">
-              Visual Strategy-to-Code Compiler & zk-SNARK Verifier
+    <div
+      className="modal-overlay"
+      onClick={onClose}
+    >
+      {/* Modal Dialog Container */}
+      <div
+        className="modal-dialog"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 1. Modal Header */}
+        <div className="flex items-center justify-between px-4 h-10 border-b border-[#1b2232] bg-[#090e18] shrink-0 font-mono text-[11px]">
+          <div className="flex items-center gap-2.5">
+            <Terminal className="w-4 h-4 text-[#06b6d4]" />
+            <span className="font-bold text-xs tracking-wider uppercase text-[#dee2f1]">
+              VISUAL STRATEGY-TO-CODE COMPILER & ZK-SNARK VERIFIER
             </span>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-dim text-cyan">
-              React Flow Engine
+            <span className="text-[9px] font-mono px-1.5 py-0.2 bg-[#1b202a] text-[#06b6d4] border border-[#1b2232]">
+              REACT FLOW HFT PIPELINE
             </span>
           </div>
-          <button onClick={onClose} className="btn-terminal text-xs">
-            Close ✕
+          <button
+            onClick={onClose}
+            className="px-2 py-1 bg-[#1b202a] hover:bg-[#242c40] text-[#dee2f1] font-bold text-[11px] border border-[#1b2232] flex items-center gap-1 transition-colors"
+          >
+            <X className="w-3.5 h-3.5" />
+            <span>CLOSE ✕</span>
           </button>
         </div>
 
-        {/* Visual Node Canvas (Top Half) */}
-        <div className="h-[42%] w-full border-b border-white/10 relative bg-[#06090e]/60">
+        {/* 2. Visual Node Canvas (React Flow) */}
+        <div
+          style={{ height: '260px', minHeight: '260px', width: '100%', position: 'relative', backgroundColor: '#090e18' }}
+          className="border-b border-[#1b2232]"
+        >
           <ReactFlow nodes={nodes} edges={edges} fitView proOptions={{ hideAttribution: true }}>
-            <Background color="#1f2937" gap={18} size={1} />
+            <Background color="#1b2232" gap={18} size={1} />
             <Controls showInteractive={false} />
           </ReactFlow>
-          <div className="absolute top-2 left-3 bg-[#0b1018]/90 px-3 py-1 rounded text-[11px] font-mono text-muted-foreground border border-white/5">
-            Active Strategy Graph: <span className="text-cyan">Hawkes_Cascade</span> ➔{' '}
-            <span className="text-amber">Fib_0.618</span> ➔{' '}
-            <span className="text-purple">Gravity_Vector</span> ➔{' '}
-            <span className="text-green">IOC_BUY</span>
+
+          {/* Strategy Flow Banner Tag */}
+          <div className="absolute top-2 left-3 bg-[#0e131d] px-2.5 py-1 text-[10px] font-mono border border-[#1b2232] text-[#94a3b8] z-10">
+            Active Strategy Pipeline: <span className="text-[#06b6d4] font-bold">Hawkes_Cascade</span> ➔{' '}
+            <span className="text-[#f59e0b] font-bold">Fib_0.618</span> ➔{' '}
+            <span className="text-[#8b5cf6] font-bold">Gravity_Vector</span> ➔{' '}
+            <span className="text-[#089981] font-bold">IOC_AGG_BUY</span>
           </div>
         </div>
 
-        {/* Dynamic Code Generator & zk-SNARK Execution (Bottom Half) */}
-        <div className="flex-1 flex flex-col bg-[#0b1018] overflow-hidden">
-          {/* Tabs */}
-          <div className="flex items-center justify-between px-5 py-2 border-b border-white/10 bg-[#0e141f]">
-            <div className="flex items-center gap-2">
+        {/* 3. Code Generation & zk-SNARK Inspection (Bottom Area) */}
+        <div className="flex-1 flex flex-col bg-[#0e131d] overflow-hidden min-h-0 font-mono text-[11px]">
+          {/* Tabs Toolbar */}
+          <div className="flex items-center justify-between px-3 h-8 border-b border-[#1b2232] bg-[#090e18] shrink-0">
+            <div className="flex items-center gap-1">
               <button
                 onClick={() => setActiveTab('cpp')}
-                className={`btn-terminal ${activeTab === 'cpp' ? 'active' : ''}`}
+                className={`px-2 py-1 text-[10px] font-bold border-b-2 flex items-center gap-1 transition-colors ${
+                  activeTab === 'cpp'
+                    ? 'bg-[#1b202a] text-[#06b6d4] border-[#06b6d4]'
+                    : 'text-[#94a3b8] border-transparent hover:text-[#dee2f1]'
+                }`}
               >
-                <Code className="w-3.5 h-3.5" /> C++20 HFT Template
+                <Code className="w-3 h-3" /> C++20 HFT Template
               </button>
               <button
                 onClick={() => setActiveTab('python')}
-                className={`btn-terminal ${activeTab === 'python' ? 'active' : ''}`}
+                className={`px-2 py-1 text-[10px] font-bold border-b-2 flex items-center gap-1 transition-colors ${
+                  activeTab === 'python'
+                    ? 'bg-[#1b202a] text-[#06b6d4] border-[#06b6d4]'
+                    : 'text-[#94a3b8] border-transparent hover:text-[#dee2f1]'
+                }`}
               >
-                <Code className="w-3.5 h-3.5" /> Python / Asyncio Backtest
+                <Code className="w-3 h-3" /> Python / Asyncio Backtest
               </button>
               <button
                 onClick={() => setActiveTab('zksnark')}
-                className={`btn-terminal ${activeTab === 'zksnark' ? 'active' : ''}`}
+                className={`px-2 py-1 text-[10px] font-bold border-b-2 flex items-center gap-1 transition-colors ${
+                  activeTab === 'zksnark'
+                    ? 'bg-[#1b202a] text-[#8b5cf6] border-[#8b5cf6]'
+                    : 'text-[#94a3b8] border-transparent hover:text-[#dee2f1]'
+                }`}
               >
-                <ShieldCheck className="w-3.5 h-3.5 text-purple" /> zk-SNARK Circom Prover
+                <ShieldCheck className="w-3 h-3 text-[#8b5cf6]" /> zk-SNARK Circom Prover
               </button>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               {activeTab === 'zksnark' && (
                 <button
                   onClick={handleGenerateProof}
                   disabled={isProving}
-                  className="btn-terminal bg-purple-dim text-purple border-purple-500/30 hover:border-purple-400"
+                  className="px-2.5 py-0.5 bg-[#8b5cf6]/20 text-[#8b5cf6] border border-[#8b5cf6]/50 text-[10px] font-bold hover:bg-[#8b5cf6]/30 transition-colors flex items-center gap-1"
                 >
-                  <Play className="w-3.5 h-3.5" />
-                  {isProving ? 'Generating Circom Proof...' : 'Execute zk-SNARK Proof'}
+                  <Play className="w-3 h-3" />
+                  {isProving ? 'Generating Groth16 Proof...' : 'Execute zk-SNARK Proof'}
                 </button>
               )}
-              <button onClick={handleCopy} className="btn-terminal">
-                {copied ? <CheckCircle2 className="w-3.5 h-3.5 text-green" /> : <Copy className="w-3.5 h-3.5" />}
-                {copied ? 'Copied' : 'Copy Code'}
+              <button
+                onClick={handleCopy}
+                className="px-2.5 py-0.5 bg-[#1b202a] text-[#dee2f1] border border-[#1b2232] text-[10px] hover:bg-[#242c40] transition-colors flex items-center gap-1"
+              >
+                {copied ? <CheckCircle2 className="w-3 h-3 text-[#089981]" /> : <Copy className="w-3 h-3" />}
+                {copied ? 'Copied!' : 'Copy Code'}
               </button>
             </div>
           </div>
 
           {/* Code Viewer & Proof Results */}
-          <div className="flex-1 flex overflow-hidden">
-            <pre className="flex-1 p-4 font-mono text-[11px] text-slate-300 overflow-auto bg-[#06090e] leading-relaxed">
+          <div className="flex-1 flex overflow-hidden min-h-0">
+            <pre className="flex-1 p-3 font-mono text-[11px] text-[#dee2f1] overflow-auto bg-[#090e18] leading-relaxed select-text m-0">
               <code>{activeCode}</code>
             </pre>
 
+            {/* zk-SNARK Proof Results Panel */}
             {activeTab === 'zksnark' && proofResult && (
-              <div className="w-96 border-l border-white/10 p-4 bg-[#0b1018] overflow-y-auto font-mono text-[11px] flex flex-col gap-3">
-                <div className="flex items-center gap-2 text-green font-bold text-xs">
-                  <CheckCircle2 className="w-4 h-4" /> Cryptographically Verified Proof
+              <div className="w-80 border-l border-[#1b2232] p-3 bg-[#0e131d] overflow-y-auto text-[10px] flex flex-col gap-2.5 shrink-0">
+                <div className="flex items-center gap-1.5 text-[#089981] font-bold text-xs">
+                  <CheckCircle2 className="w-4 h-4 text-[#089981]" /> Cryptographically Verified Proof
                 </div>
-                <div className="p-2.5 rounded bg-black/40 border border-white/10 text-slate-300">
-                  <div className="text-[10px] text-muted text-gray-400">Zero-Knowledge Guarantee:</div>
-                  <div className="text-cyan mt-1">✓ Sharpe Ratio &gt; 2.00 Proven</div>
-                  <div className="text-cyan">✓ Max Drawdown &lt; 5.0% Proven</div>
-                  <div className="text-amber mt-1">Hidden: Indicator Thresholds & Logic</div>
+                <div className="p-2 bg-[#090e18] border border-[#1b2232] text-[#dee2f1] flex flex-col gap-1">
+                  <span className="text-[#64748b]">Zero-Knowledge Guarantee:</span>
+                  <span className="text-[#089981] font-bold">✓ Sharpe Ratio &gt; 2.00 Proven (2.65)</span>
+                  <span className="text-[#089981] font-bold">✓ Max Drawdown &lt; 5.0% Proven (3.8%)</span>
+                  <span className="text-[#f59e0b] text-[9px] pt-1 border-t border-[#1b2232]">
+                    Hidden: Proprietary OFI & Hawkes parameters
+                  </span>
                 </div>
-                <div className="text-[10px] text-gray-400">Verification Hash:</div>
-                <div className="break-all text-[10px] text-purple bg-black/30 p-1.5 rounded">
-                  {proofResult.verificationHash}
+                <div>
+                  <span className="text-[#64748b]">Verification Hash:</span>
+                  <div className="break-all font-mono text-[9px] text-[#8b5cf6] bg-[#090e18] p-1.5 border border-[#1b2232] mt-0.5">
+                    {proofResult.verificationHash}
+                  </div>
                 </div>
-                <div className="text-[10px] text-gray-400">Public Signals:</div>
-                <div className="text-[10px] text-slate-300 bg-black/30 p-1.5 rounded">
-                  {JSON.stringify(proofResult.publicSignals)}
+                <div>
+                  <span className="text-[#64748b]">Public Signals:</span>
+                  <div className="font-mono text-[9px] text-[#dee2f1] bg-[#090e18] p-1.5 border border-[#1b2232] mt-0.5">
+                    {JSON.stringify(proofResult.publicSignals)}
+                  </div>
                 </div>
               </div>
             )}

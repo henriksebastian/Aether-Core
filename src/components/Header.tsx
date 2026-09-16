@@ -1,6 +1,13 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { TelemetryMetrics, TraderPersona } from '../types/market';
 import { ShieldAlert, Layers, PlayCircle, Radio } from 'lucide-react';
+import {
+  fetchBinance24hTicker,
+  fetchBinanceFundingRate,
+  formatVolumeUSD,
+  Binance24hTicker,
+  BinanceFundingRate,
+} from '../ingestion/binance_rest';
 
 interface HeaderProps {
   telemetry: TelemetryMetrics;
@@ -25,6 +32,32 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenReplayDock,
   isReplayOpen,
 }) => {
+  const [ticker, setTicker] = useState<Binance24hTicker | null>(null);
+  const [funding, setFunding] = useState<BinanceFundingRate | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadData = async () => {
+      const [tData, fData] = await Promise.all([
+        fetchBinance24hTicker(symbol),
+        fetchBinanceFundingRate(symbol),
+      ]);
+      if (isMounted) {
+        if (tData) setTicker(tData);
+        if (fData) setFunding(fData);
+      }
+    };
+
+    loadData();
+    const interval = setInterval(loadData, 10000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [symbol]);
+
   return (
     <header className="h-9 border-b border-[#1b2232] bg-[#0e131d] px-3 flex items-center justify-between z-30 select-none font-mono text-[11px]">
       {/* 1. Brand & Instrument Selector */}
@@ -60,16 +93,34 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Live Ticker Stats */}
         <div className="hidden xl:flex items-center gap-3 text-[10px] border-l border-[#1b2232] pl-3">
           <div>
-            <span className="text-[#64748b]">24H H:</span> <span className="text-[#dee2f1]">$65,490.00</span>
+            <span className="text-[#64748b]">24H H:</span>{' '}
+            <span className="text-[#dee2f1]">
+              {ticker ? `$${ticker.highPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '...'}
+            </span>
           </div>
           <div>
-            <span className="text-[#64748b]">24H L:</span> <span className="text-[#dee2f1]">$62,910.20</span>
+            <span className="text-[#64748b]">24H L:</span>{' '}
+            <span className="text-[#dee2f1]">
+              {ticker ? `$${ticker.lowPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '...'}
+            </span>
           </div>
           <div>
-            <span className="text-[#64748b]">24H VOL:</span> <span className="text-[#06b6d4]">$4.82B</span>
+            <span className="text-[#64748b]">24H CHG:</span>{' '}
+            <span className={ticker && ticker.priceChangePercent >= 0 ? 'text-[#089981] font-bold' : 'text-[#f23645] font-bold'}>
+              {ticker ? `${ticker.priceChangePercent >= 0 ? '+' : ''}${ticker.priceChangePercent.toFixed(2)}%` : '...'}
+            </span>
           </div>
           <div>
-            <span className="text-[#64748b]">FUNDING:</span> <span className="text-[#089981]">+0.0082% (1h 14m)</span>
+            <span className="text-[#64748b]">24H VOL:</span>{' '}
+            <span className="text-[#06b6d4] font-bold">
+              {ticker ? formatVolumeUSD(ticker.quoteVolume) : '...'}
+            </span>
+          </div>
+          <div>
+            <span className="text-[#64748b]">FUNDING:</span>{' '}
+            <span className={funding && funding.fundingRate >= 0 ? 'text-[#089981]' : 'text-[#f23645]'}>
+              {funding ? `${funding.fundingRate >= 0 ? '+' : ''}${(funding.fundingRate * 100).toFixed(4)}% (${funding.countdownFormatted})` : '+0.0100% (8h)'}
+            </span>
           </div>
         </div>
       </div>
