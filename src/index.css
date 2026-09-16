@@ -1,0 +1,173 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg-core: #06090e;
+  --bg-surface: #0b1018;
+  --bg-surface-glass: rgba(11, 16, 24, 0.75);
+  --bg-elevated: #111823;
+  --bg-card: rgba(17, 24, 35, 0.6);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-active: rgba(0, 243, 255, 0.4);
+  --border-glow: 0 0 12px rgba(0, 243, 255, 0.25);
+
+  --accent-cyan: #00f3ff;
+  --accent-cyan-dim: rgba(0, 243, 255, 0.15);
+  --accent-green: #00ff88;
+  --accent-green-dim: rgba(0, 255, 136, 0.15);
+  --accent-rose: #ff0055;
+  --accent-rose-dim: rgba(255, 0, 85, 0.15);
+  --accent-amber: #ffb700;
+  --accent-amber-dim: rgba(255, 183, 0, 0.15);
+  --accent-purple: #9d4edd;
+  --accent-purple-dim: rgba(157, 78, 221, 0.15);
+
+  --text-primary: #f0f4f8;
+  --text-secondary: #94a3b8;
+  --text-muted: #526071;
+
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-display: 'Outfit', sans-serif;
+  --font-sans: 'Inter', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-core);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom terminal scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-surface);
+}
+::-webkit-scrollbar-thumb {
+  background: #1f2937;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #374151;
+}
+
+/* Glassmorphism Panel */
+.glass-panel {
+  background: var(--bg-surface-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.glass-panel:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.glass-panel-glow {
+  box-shadow: 0 0 20px rgba(0, 243, 255, 0.08);
+}
+
+/* Cyber glow helpers */
+.glow-cyan {
+  box-shadow: 0 0 10px rgba(0, 243, 255, 0.35);
+}
+.glow-green {
+  box-shadow: 0 0 10px rgba(0, 255, 136, 0.35);
+}
+.glow-rose {
+  box-shadow: 0 0 10px rgba(255, 0, 85, 0.35);
+}
+.glow-amber {
+  box-shadow: 0 0 10px rgba(255, 183, 0, 0.35);
+}
+
+.text-cyan { color: var(--accent-cyan); }
+.text-green { color: var(--accent-green); }
+.text-rose { color: var(--accent-rose); }
+.text-amber { color: var(--accent-amber); }
+.text-purple { color: var(--accent-purple); }
+
+.bg-cyan-dim { background-color: var(--accent-cyan-dim); }
+.bg-green-dim { background-color: var(--accent-green-dim); }
+.bg-rose-dim { background-color: var(--accent-rose-dim); }
+.bg-amber-dim { background-color: var(--accent-amber-dim); }
+.bg-purple-dim { background-color: var(--accent-purple-dim); }
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+/* Scanline and grid background overlay */
+.bg-grid-overlay {
+  background-size: 30px 30px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+}
+
+/* Pulsing indicators */
+@keyframes pulse-fast {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.1); }
+}
+.animate-pulse-live {
+  animation: pulse-fast 1.5s infinite ease-in-out;
+}
+
+/* Persona transitions */
+.persona-transition {
+  transition: all 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Depth ladder bar */
+.depth-bar-bid {
+  background: linear-gradient(90deg, rgba(0, 255, 136, 0.15) 0%, rgba(0, 255, 136, 0.02) 100%);
+}
+.depth-bar-ask {
+  background: linear-gradient(90deg, rgba(255, 0, 85, 0.15) 0%, rgba(255, 0, 85, 0.02) 100%);
+}
+
+/* Button micro-interactions */
+.btn-terminal {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+.btn-terminal:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+.btn-terminal.active {
+  background: var(--accent-cyan-dim);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
+}
