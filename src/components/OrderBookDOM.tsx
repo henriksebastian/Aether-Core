@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { OrderBookL2, MarketTick } from '../types/market';
 import { L3SimulationState } from '../ingestion/synthetic_l3';
 import { ShieldCheck, AlertTriangle } from 'lucide-react';
+import { getInstrument } from '../data/market_directory';
 
 interface OrderBookDOMProps {
+  symbol?: string;
   orderBook: OrderBookL2 | null;
   recentTrades: MarketTick[];
   microPrice: number;
@@ -13,6 +15,7 @@ interface OrderBookDOMProps {
 }
 
 export const OrderBookDOM: React.FC<OrderBookDOMProps> = ({
+  symbol,
   orderBook,
   recentTrades,
   microPrice,
@@ -22,10 +25,12 @@ export const OrderBookDOM: React.FC<OrderBookDOMProps> = ({
 }) => {
   const [tickSize, setTickSize] = useState<'0.5' | '1.0' | '5.0'>('0.5');
 
+  const inst = getInstrument(symbol || orderBook?.symbol || 'BTCUSDT');
+
   if (!orderBook) {
     return (
       <div className="w-80 h-full border-l border-[#1b2232] bg-[#090e18] p-4 flex items-center justify-center text-[11px] font-mono text-[#64748b]">
-        Syncing Market Depth...
+        Syncing Market Depth for {inst.symbol}...
       </div>
     );
   }
@@ -48,15 +53,18 @@ export const OrderBookDOM: React.FC<OrderBookDOMProps> = ({
     return { ...b, cum: cumBid };
   });
 
-  const totalDepth = cumAsk + cumBid;
-  const bidRatio = totalDepth > 0 ? (cumBid / totalDepth) * 100 : 50;
+  const totalBidVol = bidsWithCum.reduce((acc, b) => acc + b.quantity, 0);
+  const totalAskVol = asksWithCum.reduce((acc, a) => acc + a.quantity, 0);
+  const bidRatio = totalBidVol + totalAskVol > 0 ? (totalBidVol / (totalBidVol + totalAskVol)) * 100 : 50;
+
+  const qtyDecimals = inst.lotSize < 1 ? 3 : 1;
 
   return (
-    <div className="w-80 h-full border-l border-[#1b2232] bg-[#090e18] flex flex-col font-mono text-[11px] select-none shrink-0">
-      {/* 1. L2 DOM Header */}
-      <div className="h-7 bg-[#0e131d] border-b border-[#1b2232] flex items-center justify-between px-2.5 text-[10px]">
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-[#dee2f1] uppercase">ORDER BOOK (L2 DOM)</span>
+    <div className="w-80 h-full border-l border-[#1b2232] bg-[#090e18] flex flex-col select-none font-mono text-[11px] shrink-0">
+      {/* 1. Header Toolbar */}
+      <div className="h-7 border-b border-[#1b2232] bg-[#0e131d] px-2.5 flex items-center justify-between text-[10px]">
+        <div className="flex items-center gap-1.5">
+          <span className="font-bold text-[#dee2f1]">{inst.exchange} L2 DOM</span>
           <span className="text-[#64748b]">Prio: {(queuePriority * 100).toFixed(0)}%</span>
         </div>
         <div className="flex items-center gap-1">
@@ -78,8 +86,8 @@ export const OrderBookDOM: React.FC<OrderBookDOMProps> = ({
 
       {/* 2. Column Headers */}
       <div className="grid grid-cols-3 h-5 bg-[#0e131d] border-b border-[#1b2232] px-2 text-[9px] text-[#64748b] items-center">
-        <div>PRICE (USDT)</div>
-        <div className="text-right">SIZE (BTC)</div>
+        <div>PRICE ({inst.currency})</div>
+        <div className="text-right">SIZE ({inst.baseAsset})</div>
         <div className="text-right">TOTAL (CUM)</div>
       </div>
 
@@ -96,9 +104,9 @@ export const OrderBookDOM: React.FC<OrderBookDOMProps> = ({
                 className="absolute inset-y-0 right-0 bg-[#f23645]/15 pointer-events-none"
                 style={{ width: `${depthPct}%` }}
               />
-              <span className="relative z-10 text-[#f23645] font-medium">{level.price.toFixed(2)}</span>
-              <span className="relative z-10 text-right text-[#dee2f1]">{level.quantity.toFixed(3)}</span>
-              <span className="relative z-10 text-right text-[#64748b]">{level.cum.toFixed(3)}</span>
+              <span className="relative z-10 text-[#f23645] font-medium">{level.price.toFixed(inst.decimals)}</span>
+              <span className="relative z-10 text-right text-[#dee2f1]">{level.quantity.toFixed(qtyDecimals)}</span>
+              <span className="relative z-10 text-right text-[#64748b]">{level.cum.toFixed(qtyDecimals)}</span>
             </div>
           );
         })}
@@ -108,10 +116,10 @@ export const OrderBookDOM: React.FC<OrderBookDOMProps> = ({
       <div className="py-1 px-2.5 bg-[#0e131d] border-y border-[#1b2232] flex flex-col gap-1 text-[10px]">
         <div className="flex items-center justify-between">
           <span className="text-[#64748b]">
-            SPREAD: <strong className="text-[#089981]">${spread.toFixed(2)}</strong>
+            SPREAD: <strong className="text-[#089981]">{inst.currencySymbol}{spread.toFixed(inst.decimals)}</strong>
           </span>
-          <span className="text-[#dee2f1] font-bold">${midPrice.toFixed(2)}</span>
-          <span className="text-[#06b6d4]">µP: {microPrice.toFixed(2)}</span>
+          <span className="text-[#dee2f1] font-bold">{inst.currencySymbol}{midPrice.toFixed(inst.decimals)}</span>
+          <span className="text-[#06b6d4]">µP: {microPrice.toFixed(inst.decimals)}</span>
         </div>
         <div className="flex items-center justify-between text-[9px] text-[#64748b]">
           <span>IMBALANCE: {bidRatio.toFixed(1)}% BID</span>
@@ -142,32 +150,25 @@ export const OrderBookDOM: React.FC<OrderBookDOMProps> = ({
                 className="absolute inset-y-0 right-0 bg-[#089981]/15 pointer-events-none"
                 style={{ width: `${depthPct}%` }}
               />
-              <span className="relative z-10 text-[#089981] font-medium">{level.price.toFixed(2)}</span>
-              <span className="relative z-10 text-right text-[#dee2f1]">{level.quantity.toFixed(3)}</span>
-              <span className="relative z-10 text-right text-[#64748b]">{level.cum.toFixed(3)}</span>
+              <span className="relative z-10 text-[#089981] font-medium">{level.price.toFixed(inst.decimals)}</span>
+              <span className="relative z-10 text-right text-[#dee2f1]">{level.quantity.toFixed(qtyDecimals)}</span>
+              <span className="relative z-10 text-right text-[#64748b]">{level.cum.toFixed(qtyDecimals)}</span>
             </div>
           );
         })}
       </div>
 
-      {/* 6. Live Real-Time Trade Tape (Time & Sales) */}
-      <div className="h-44 border-t border-[#1b2232] bg-[#0e131d] flex flex-col">
-        <div className="h-5 bg-[#090e18] border-b border-[#1b2232] px-2 flex items-center justify-between text-[9px] text-[#64748b]">
-          <span className="font-bold text-[#dee2f1]">TIME & SALES (TAPE)</span>
+      {/* 6. Live Time & Sales Recent Trades Tape */}
+      <div className="h-32 border-t border-[#1b2232] flex flex-col bg-[#070b12]">
+        <div className="h-5 bg-[#0e131d] px-2 flex items-center justify-between text-[9px] text-[#64748b] border-b border-[#1b2232]">
+          <span>RECENT TRADES TAPE</span>
           <span>{recentTrades.length} TICKS</span>
         </div>
-        <div className="grid grid-cols-4 h-4 bg-[#0e131d] px-2 text-[8px] text-[#64748b] items-center border-b border-[#1b2232]">
-          <div>TIME</div>
-          <div className="text-right">PRICE</div>
-          <div className="text-right">SIZE</div>
-          <div className="text-right">SIDE</div>
-        </div>
-        <div className="flex-1 overflow-y-auto divide-y divide-[#1b2232]/20 text-[10px]">
+        <div className="flex-1 overflow-y-auto divide-y divide-[#1b2232]/10 text-[10px]">
           {recentTrades.slice(0, 15).map((t, idx) => {
-            const d = new Date(t.timestamp);
-            const timeStr = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}.${d.getMilliseconds().toString().padStart(3, '0')}`;
             const isBuy = t.side === 'buy';
-            const isWhale = t.quantity >= 3.0;
+            const timeStr = new Date(t.timestamp).toTimeString().split(' ')[0];
+            const isWhale = t.quantity >= inst.lotSize * 3.0;
 
             return (
               <div
@@ -178,9 +179,9 @@ export const OrderBookDOM: React.FC<OrderBookDOMProps> = ({
               >
                 <span className="text-[#64748b] text-[9px]">{timeStr}</span>
                 <span className={`text-right ${isBuy ? 'text-[#089981]' : 'text-[#f23645]'}`}>
-                  {t.price.toFixed(2)}
+                  {t.price.toFixed(inst.decimals)}
                 </span>
-                <span className="text-right text-[#dee2f1]">{t.quantity.toFixed(3)}</span>
+                <span className="text-right text-[#dee2f1]">{t.quantity.toFixed(qtyDecimals)}</span>
                 <div className="text-right">
                   <span
                     className={`px-1 py-0.2 text-[8px] font-bold ${

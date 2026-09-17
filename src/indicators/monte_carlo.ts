@@ -41,7 +41,8 @@ export function computeMonteCarloForecast(
   symbol: string,
   timeframe: Timeframe,
   steps: number = 18,
-  paths: number = 3000
+  paths: number = 3000,
+  targetRR: number = 3.0
 ): MonteCarloForecast | null {
   if (!spotPrice || spotPrice <= 0 || candles.length === 0) return null;
 
@@ -125,13 +126,13 @@ export function computeMonteCarloForecast(
   const riskLossUSD = Math.round((spotPrice - targetSL) * 100) / 100;
   const riskLossPct = Math.round((riskLossUSD / spotPrice) * 10000) / 100;
 
-  // Minimum 3.0:1 Reward-to-Risk Ratio Target Calibration (+3R Exit Target)
-  const minGain3R = riskLossUSD * 3.0;
-  const rawTP = Math.max(p75[steps - 1], spotPrice + minGain3R);
+  // Dynamic Reward-to-Risk Ratio Target Calibration (+RR Exit Target)
+  const minGainRR = riskLossUSD * Math.max(1.0, targetRR);
+  const rawTP = Math.max(p75[steps - 1], spotPrice + minGainRR);
   const targetTP = Math.round(rawTP * 100) / 100;
   const expectedGainUSD = Math.round((targetTP - spotPrice) * 100) / 100;
   const expectedGainPct = Math.round((expectedGainUSD / spotPrice) * 10000) / 100;
-  const riskRewardRatio = riskLossUSD > 0 ? Math.round((expectedGainUSD / riskLossUSD) * 100) / 100 : 3.0;
+  const riskRewardRatio = riskLossUSD > 0 ? Math.round((expectedGainUSD / riskLossUSD) * 100) / 100 : targetRR;
 
   // 6. Signal & Confidence Synthesis
   let signal: 'STRONG BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG SELL' = 'NEUTRAL';

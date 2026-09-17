@@ -55,6 +55,11 @@ export interface MicrostructureMetrics {
   isingPhaseIndex: number; // Magnetization/order parameter (-1 to +1)
   markovState: 'Trending' | 'Mean-Reverting' | 'Volatile-Breakout';
   liquidityGravityVector: { price: number; force: number };
+  vpin?: number; // Volume-Synchronized Probability of Toxicity
+  rollSpread?: number; // Roll (1984) serial covariance spread
+  avellanedaReservation?: number; // Avellaneda-Stoikov indifference price
+  kalmanPrice?: number; // Kalman recursive price estimate
+  garchVariance?: number; // GARCH(1,1) conditional variance
 }
 
 export type TraderPersona = 'Micro-Scalper' | 'Intraday Momentum' | 'Positional Quant';

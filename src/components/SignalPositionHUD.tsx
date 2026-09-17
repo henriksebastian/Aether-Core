@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { MonteCarloForecast } from '../indicators/monte_carlo';
+import { getInstrument } from '../data/market_directory';
 import {
   TrendingUp,
   TrendingDown,
@@ -14,6 +15,7 @@ import {
   AlertCircle,
   Lock,
   Percent,
+  GripHorizontal,
 } from 'lucide-react';
 
 export type RiskTier = 'CONSERVATIVE' | 'BALANCED' | 'AGGRESSIVE' | 'CUSTOM';
@@ -51,6 +53,8 @@ interface SignalPositionHUDProps {
   onClosePosition: () => void;
   onLockBreakeven?: () => void;
   onUpdateTPSL?: (tp: number, sl: number) => void;
+  targetRR?: number;
+  onTargetRRChange?: (rr: number) => void;
 }
 
 export const SignalPositionHUD: React.FC<SignalPositionHUDProps> = ({
@@ -63,6 +67,9 @@ export const SignalPositionHUD: React.FC<SignalPositionHUDProps> = ({
   onExecuteTrade,
   onClosePosition,
   onLockBreakeven,
+  onUpdateTPSL,
+  targetRR = 3.0,
+  onTargetRRChange,
 }) => {
   const [isMinimized, setIsMinimized] = useState(false);
   const [activeTab, setActiveTab] = useState<'EXECUTE' | 'TARGETS' | 'KELLY'>('EXECUTE');
@@ -72,20 +79,91 @@ export const SignalPositionHUD: React.FC<SignalPositionHUDProps> = ({
   const [customTP, setCustomTP] = useState<number | null>(null);
   const [customSL, setCustomSL] = useState<number | null>(null);
 
-  const unit = symbol.replace('USDT', '');
+  // Draggable HUD window state
+  const [position, setPosition] = useState<{ x: number; y: number }>({ x: 14, y: 14 });
+  const [isDragging, setIsDragging] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragStartRef = useRef<{ mouseX: number; mouseY: number; startX: number; startY: number }>({
+    mouseX: 0,
+    mouseY: 0,
+    startX: 14,
+    startY: 14,
+  });
+
+  // Handle Drag Start
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button, input, select')) return;
+    setIsDragging(true);
+    dragStartRef.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      startX: position.x,
+      startY: position.y,
+    };
+  };
+
+  // Handle Drag Motion
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const onMouseMove = (e: MouseEvent) => {
+      const dx = e.clientX - dragStartRef.current.mouseX;
+      const dy = e.clientY - dragStartRef.current.mouseY;
+      const parent = containerRef.current?.parentElement;
+      const cardW = containerRef.current?.clientWidth || 320;
+      const cardH = containerRef.current?.clientHeight || 200;
+      const maxW = parent ? parent.clientWidth - cardW - 8 : window.innerWidth - cardW - 20;
+      const maxH = parent ? parent.clientHeight - cardH - 8 : window.innerHeight - cardH - 50;
+
+      const newX = Math.max(8, Math.min(Math.max(8, maxW), dragStartRef.current.startX + dx));
+      const newY = Math.max(8, Math.min(Math.max(8, maxH), dragStartRef.current.startY + dy));
+      setPosition({ x: newX, y: newY });
+    };
+
+    const onMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [isDragging]);
+
+  // Corner Snap Presets
+  const snapTo = (corner: 'TL' | 'TR' | 'BL') => {
+    const parent = containerRef.current?.parentElement;
+    const cardW = containerRef.current?.clientWidth || 320;
+    const cardH = containerRef.current?.clientHeight || 240;
+    const parentW = parent ? parent.clientWidth : 1000;
+    const parentH = parent ? parent.clientHeight : 600;
+
+    if (corner === 'TL') {
+      setPosition({ x: 14, y: 14 });
+    } else if (corner === 'TR') {
+      setPosition({ x: Math.max(14, parentW - cardW - 85), y: 14 });
+    } else if (corner === 'BL') {
+      setPosition({ x: 14, y: Math.max(14, parentH - cardH - 24) });
+    }
+  };
+
+  const inst = getInstrument(symbol);
+  const unit = inst.baseAsset;
 
   // Dynamic Multiplier based on Risk Tier
   const tierMultiplier =
     riskTier === 'CONSERVATIVE' ? 0.5 : riskTier === 'BALANCED' ? 1.0 : riskTier === 'AGGRESSIVE' ? 2.0 : customLeverage / 2.5;
 
   // Base Notional calculation depending on chosen Sizing Model
-  const baseNotional = mcForecast?.recommendedSize.notionalUSD || 25000;
+  const baseNotional = mcForecast?.recommendedSize.notionalUSD || (inst.referencePrice * inst.lotSize * 10);
   let computedNotional = baseNotional * tierMultiplier;
   if (sizingModel === 'VOL_ADJUSTED' && mcForecast) {
     const volDampener = Math.max(0.4, Math.min(2.0, 35 / (mcForecast.realizedVolatility || 35)));
     computedNotional = computedNotional * volDampener;
   } else if (sizingModel === 'FIXED') {
-    computedNotional = symbol.startsWith('BTC') ? 25000 : symbol.startsWith('ETH') ? 12000 : 8000;
+    computedNotional = Math.round(inst.referencePrice * inst.lotSize * 10);
   }
 
   computedNotional = Math.round(computedNotional);
@@ -117,39 +195,87 @@ export const SignalPositionHUD: React.FC<SignalPositionHUDProps> = ({
   const signalBg = isBuy ? 'bg-[#089981]' : isSell ? 'bg-[#f23645]' : 'bg-[#f59e0b]';
 
   return (
-    <div className="absolute left-3 top-3 bg-[#0a0f19]/95 border border-[#1b253b] shadow-2xl rounded font-mono text-[10px] w-80 select-none backdrop-blur-md pointer-events-auto z-20 transition-all">
-      {/* 1. Header Bar: Live Signal Beacon & Quick Minimizer */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[#1b253b] bg-[#0f172a]/90 rounded-t">
-        <div className="flex items-center gap-2">
-          <span className={`w-2.5 h-2.5 rounded-full ${signalBg} ${activePosition ? 'animate-ping' : 'animate-pulse'}`} />
-          <span className="text-[#64748b] text-[9px] font-bold tracking-wider">
-            {activePosition ? 'LIVE POSITION' : 'ALPHA SIGNAL'}
+    <div
+      ref={containerRef}
+      className={`absolute border border-[#1b253b] shadow-[0_20px_50px_rgba(0,0,0,0.98)] rounded font-mono text-[10px] w-80 select-none pointer-events-auto z-30 transition-shadow ${
+        isDragging ? 'shadow-cyan-500/20 ring-1 ring-[#06b6d4]/40 cursor-grabbing' : ''
+      }`}
+      style={{
+        left: `${position.x}px`,
+        top: `${position.y}px`,
+        backgroundColor: '#080d16',
+        opacity: 1,
+      }}
+    >
+      {/* 1. Header Bar: Live Signal Beacon, Drag Handle, Snap Presets & Minimizer */}
+      <div
+        onMouseDown={handleMouseDown}
+        className="flex items-center justify-between px-2.5 py-1.5 border-b border-[#1b253b] bg-[#0c1322] rounded-t cursor-grab active:cursor-grabbing hover:bg-[#10192e] transition-colors"
+        style={{ backgroundColor: '#0c1322' }}
+        title="Click & Drag to move Alpha Signal Window anywhere on chart canvas"
+      >
+        <div className="flex items-center gap-1.5">
+          <GripHorizontal size={13} className="text-[#64748b] hover:text-[#dee2f1] cursor-grab" />
+          <span className={`w-2 h-2 rounded-full ${signalBg} ${activePosition ? 'animate-ping' : 'animate-pulse'}`} />
+          <span className="text-[8px] font-bold px-1 py-0.2 bg-[#1b253b] text-[#06b6d4] border border-[#2a3854]">
+            {inst.exchange}
           </span>
-          <span className={`font-bold tracking-wide text-[11px] ${activePosition ? (activePosition.side === 'LONG' ? 'text-[#089981]' : 'text-[#f23645]') : signalColor}`}>
+          <span className="text-[#64748b] text-[8.5px] font-bold tracking-wider">
+            {activePosition ? 'POSITION' : 'SIGNAL'}
+          </span>
+          <span className={`font-bold tracking-wide text-[10.5px] ${activePosition ? (activePosition.side === 'LONG' ? 'text-[#089981]' : 'text-[#f23645]') : signalColor}`}>
             {activePosition
               ? `${activePosition.side} ${activePosition.quantity} ${unit} (${activePosition.leverage}x)`
               : signal}
           </span>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
+          {/* Quick Snap Corner Buttons */}
+          <div className="flex items-center bg-[#080d16] border border-[#182238] rounded-sm px-0.5" style={{ backgroundColor: '#080d16' }} title="Quick Snap Window Placement">
+            <button
+              onClick={() => snapTo('TL')}
+              className="px-1 py-0.2 text-[8px] text-[#64748b] hover:text-[#06b6d4] hover:bg-[#141d30]"
+              title="Snap to Top-Left"
+            >
+              TL
+            </button>
+            <span className="text-[#182238]">|</span>
+            <button
+              onClick={() => snapTo('TR')}
+              className="px-1 py-0.2 text-[8px] text-[#64748b] hover:text-[#06b6d4] hover:bg-[#141d30]"
+              title="Snap to Top-Right (Clear of Candles)"
+            >
+              TR
+            </button>
+            <span className="text-[#182238]">|</span>
+            <button
+              onClick={() => snapTo('BL')}
+              className="px-1 py-0.2 text-[8px] text-[#64748b] hover:text-[#06b6d4] hover:bg-[#141d30]"
+              title="Snap to Bottom-Left"
+            >
+              BL
+            </button>
+          </div>
+
           {!activePosition && mcForecast && (
-            <span className="text-[9px] px-1.5 py-0.5 bg-[#06b6d4]/10 text-[#06b6d4] border border-[#06b6d4]/30 rounded font-bold">
-              {confidence}% CONF
+            <span className="text-[8.5px] px-1 py-0.2 bg-[#06b6d4]/10 text-[#06b6d4] border border-[#06b6d4]/30 rounded font-bold">
+              {confidence}%
             </span>
           )}
+
           <button
             onClick={() => setIsMinimized((v) => !v)}
-            className="p-1 text-[#64748b] hover:text-[#dee2f1] hover:bg-[#1b253b] rounded transition-colors"
+            className="p-1 text-[#64748b] hover:text-[#dee2f1] hover:bg-[#182238] rounded transition-colors"
             title={isMinimized ? 'Expand HUD' : 'Minimize HUD'}
           >
-            {isMinimized ? <Maximize2 size={12} /> : <Minimize2 size={12} />}
+            {isMinimized ? <Maximize2 size={11} /> : <Minimize2 size={11} />}
           </button>
         </div>
       </div>
 
       {!isMinimized && (
-        <div className="p-2.5 space-y-2">
+        <div className="p-2.5 space-y-2" style={{ backgroundColor: '#080d16' }}>
           {/* Active Position Live Dashboard */}
           {activePosition && activePnL ? (
             <div className="p-2 bg-[#0d1424] border border-[#1b253b] rounded space-y-2">
@@ -168,19 +294,19 @@ export const SignalPositionHUD: React.FC<SignalPositionHUDProps> = ({
               <div className="grid grid-cols-2 gap-1.5 text-[9px]">
                 <div className="bg-[#090d16] p-1.5 rounded border border-[#182238]">
                   <span className="text-[#64748b] block">ENTRY PRICE:</span>
-                  <span className="text-[#dee2f1] font-bold">${activePosition.entryPrice.toFixed(2)}</span>
+                  <span className="text-[#dee2f1] font-bold">{inst.currencySymbol}{activePosition.entryPrice.toFixed(inst.decimals)}</span>
                 </div>
                 <div className="bg-[#090d16] p-1.5 rounded border border-[#182238]">
                   <span className="text-[#64748b] block">CURRENT MARK:</span>
-                  <span className="text-[#dee2f1] font-bold">${spotPrice.toFixed(2)}</span>
+                  <span className="text-[#dee2f1] font-bold">{inst.currencySymbol}{spotPrice.toFixed(inst.decimals)}</span>
                 </div>
                 <div className="bg-[#090d16] p-1.5 rounded border border-[#182238]">
                   <span className="text-[#64748b] block">TARGET TP:</span>
-                  <span className="text-[#089981] font-bold">${activePosition.targetTP.toFixed(2)}</span>
+                  <span className="text-[#089981] font-bold">{inst.currencySymbol}{activePosition.targetTP.toFixed(inst.decimals)}</span>
                 </div>
                 <div className="bg-[#090d16] p-1.5 rounded border border-[#182238]">
                   <span className="text-[#64748b] block">STOP LOSS:</span>
-                  <span className="text-[#f23645] font-bold">${activePosition.targetSL.toFixed(2)}</span>
+                  <span className="text-[#f23645] font-bold">{inst.currencySymbol}{activePosition.targetSL.toFixed(inst.decimals)}</span>
                 </div>
               </div>
 
@@ -190,8 +316,8 @@ export const SignalPositionHUD: React.FC<SignalPositionHUDProps> = ({
                   <button
                     onClick={onLockBreakeven}
                     className={`flex-1 py-1 px-1.5 text-[9px] font-bold border rounded transition-colors flex items-center justify-center gap-1 ${activePosition.isBreakevenLocked
-                        ? 'bg-[#089981]/20 border-[#089981] text-[#089981]'
-                        : 'bg-[#1b253b] border-[#2a3854] text-[#94a3b8] hover:text-[#dee2f1]'
+                      ? 'bg-[#089981]/20 border-[#089981] text-[#089981]'
+                      : 'bg-[#1b253b] border-[#2a3854] text-[#94a3b8] hover:text-[#dee2f1]'
                       }`}
                   >
                     <Lock size={10} />
@@ -248,8 +374,8 @@ export const SignalPositionHUD: React.FC<SignalPositionHUDProps> = ({
                             key={tier}
                             onClick={() => setRiskTier(tier)}
                             className={`px-1.5 py-0.5 rounded text-[8px] font-bold border transition-colors ${riskTier === tier
-                                ? 'bg-[#06b6d4]/20 text-[#06b6d4] border-[#06b6d4]'
-                                : 'text-[#64748b] border-[#1b253b] hover:text-[#94a3b8]'
+                              ? 'bg-[#06b6d4]/20 text-[#06b6d4] border-[#06b6d4]'
+                              : 'text-[#64748b] border-[#1b253b] hover:text-[#94a3b8]'
                               }`}
                           >
                             {tier === 'CONSERVATIVE' ? '1x' : tier === 'BALANCED' ? '2.5x' : tier === 'AGGRESSIVE' ? '5x' : `${customLeverage}x`}
@@ -285,8 +411,8 @@ export const SignalPositionHUD: React.FC<SignalPositionHUDProps> = ({
                           key={model}
                           onClick={() => setSizingModel(model)}
                           className={`px-1 py-0.5 text-[8px] rounded border transition-colors ${sizingModel === model
-                              ? 'bg-[#1b253b] text-[#dee2f1] border-[#06b6d4]'
-                              : 'text-[#64748b] border-[#182238] hover:text-[#94a3b8]'
+                            ? 'bg-[#1b253b] text-[#dee2f1] border-[#06b6d4]'
+                            : 'text-[#64748b] border-[#182238] hover:text-[#94a3b8]'
                             }`}
                         >
                           {model === 'KELLY' ? 'Kelly' : model === 'VOL_ADJUSTED' ? 'Vol-Parity' : 'Fixed'}
@@ -310,9 +436,15 @@ export const SignalPositionHUD: React.FC<SignalPositionHUDProps> = ({
                       </span>
                     </div>
                     <div className="flex justify-between text-[9px] text-[#64748b]">
-                      <span>MAX RISK AT SL:</span>
+                      <span>MAX RISK AT SL (-1R):</span>
                       <span className="text-[#f23645] font-mono">
-                        -${mcForecast ? Math.round(computedQuantity * (spotPrice - mcForecast.targetSL)).toLocaleString() : '0'} USD
+                        -${mcForecast ? Math.round(computedQuantity * Math.abs(spotPrice - mcForecast.targetSL)).toLocaleString() : '0'} USD
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-[9px] text-[#64748b]">
+                      <span>TARGET GAIN (+{targetRR.toFixed(1)}R):</span>
+                      <span className="text-[#089981] font-mono">
+                        +${mcForecast ? Math.round(computedQuantity * Math.abs(mcForecast.targetTP - spotPrice)).toLocaleString() : '0'} USD
                       </span>
                     </div>
                   </div>
@@ -360,38 +492,84 @@ export const SignalPositionHUD: React.FC<SignalPositionHUDProps> = ({
                     {/* 1. ENTRY */}
                     <div className="flex justify-between items-center pb-1 border-b border-[#182238]">
                       <span className="text-[#06b6d4] font-bold flex items-center gap-1">
-                        🎯 1. WHERE TO ENTER (SPOT):
+                        1. WHERE TO ENTER (SPOT):
                       </span>
-                      <span className="text-[#dee2f1] font-mono font-bold">${spotPrice.toFixed(2)}</span>
+                      <span className="text-[#dee2f1] font-mono font-bold">{inst.currencySymbol}{spotPrice.toFixed(inst.decimals)}</span>
                     </div>
 
                     {/* 2. STOP LOSS */}
                     <div className="flex justify-between items-center text-[#f23645]">
                       <span className="flex items-center gap-1 font-bold">
-                        🛑 2. STOP LOSS (-1R RISK):
+                        2. STOP LOSS (-1R RISK):
                       </span>
                       <span className="font-bold font-mono">
-                        ${mcForecast.targetSL.toFixed(2)}{' '}
-                        <span className="text-[9px] font-normal">(-${mcForecast.riskLossUSD.toFixed(2)} / -{mcForecast.riskLossPct.toFixed(2)}%)</span>
+                        {inst.currencySymbol}{mcForecast.targetSL.toFixed(inst.decimals)}{' '}
+                        <span className="text-[9px] font-normal">(-{inst.currencySymbol}{mcForecast.riskLossUSD.toFixed(2)} / -{mcForecast.riskLossPct.toFixed(2)}%)</span>
                       </span>
                     </div>
 
                     {/* 3. TAKE PROFIT EXIT */}
                     <div className="flex justify-between items-center text-[#089981]">
                       <span className="flex items-center gap-1 font-bold">
-                        💰 3. WHERE TO EXIT (+3R TARGET):
+                        3. WHERE TO EXIT (+{targetRR.toFixed(1)}R TARGET):
                       </span>
                       <span className="font-bold font-mono">
-                        ${mcForecast.targetTP.toFixed(2)}{' '}
-                        <span className="text-[9px] font-normal">(+${mcForecast.expectedGainUSD.toFixed(2)} / +{mcForecast.expectedGainPct.toFixed(2)}%)</span>
+                        {inst.currencySymbol}{mcForecast.targetTP.toFixed(inst.decimals)}{' '}
+                        <span className="text-[9px] font-normal">(+{inst.currencySymbol}{mcForecast.expectedGainUSD.toFixed(2)} / +{mcForecast.expectedGainPct.toFixed(2)}%)</span>
                       </span>
                     </div>
                   </div>
 
+                  {/* Interactive R:R Ratio Customizer Box */}
+                  {onTargetRRChange && (
+                    <div className="bg-[#090d16] p-2 rounded border border-[#182238] space-y-1.5">
+                      <div className="flex justify-between items-center text-[9px]">
+                        <span className="text-[#64748b] flex items-center gap-1 font-bold">
+                          <Target size={10} className="text-[#06b6d4]" /> TARGET R:R RATIO:
+                        </span>
+                        <span className="text-[#089981] font-extrabold font-mono text-[11px]">
+                          {targetRR.toFixed(1)} : 1
+                        </span>
+                      </div>
+
+                      {/* Quick Presets */}
+                      <div className="flex gap-1">
+                        {[1.5, 2.0, 2.5, 3.0, 4.0, 5.0].map((rr) => (
+                          <button
+                            key={rr}
+                            onClick={() => onTargetRRChange(rr)}
+                            className={`flex-1 py-0.5 text-[8.5px] font-bold border transition-colors ${
+                              Math.abs(targetRR - rr) < 0.05
+                                ? 'bg-[#089981]/20 text-[#089981] border-[#089981]'
+                                : 'text-[#64748b] border-[#1b253b] hover:text-[#dee2f1]'
+                            }`}
+                          >
+                            {rr}R
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Fluid Stepper & Slider */}
+                      <div className="flex items-center gap-2 pt-0.5">
+                        <span className="text-[8px] text-[#64748b]">1.0R</span>
+                        <input
+                          type="range"
+                          min="1.0"
+                          max="8.0"
+                          step="0.1"
+                          value={targetRR}
+                          onChange={(e) => onTargetRRChange(parseFloat(e.target.value))}
+                          className="flex-1 accent-[#089981] h-1 bg-[#1b253b] rounded cursor-pointer"
+                        />
+                        <span className="text-[8px] text-[#64748b]">8.0R</span>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-1.5 text-[9px]">
                     <div className="bg-[#090d16] p-1.5 rounded border border-[#182238] flex justify-between items-center">
                       <span className="text-[#64748b]">R:R RATIO:</span>
-                      <span className="text-[#089981] font-extrabold font-mono">{mcForecast.riskRewardRatio.toFixed(2)} : 1 (MIN 3R)</span>
+                      <span className="text-[#089981] font-extrabold font-mono">{mcForecast.riskRewardRatio.toFixed(2)} : 1 ({targetRR.toFixed(1)}R TARGET)</span>
                     </div>
                     <div className="bg-[#090d16] p-1.5 rounded border border-[#182238] flex justify-between items-center">
                       <span className="text-[#64748b]">WIN PROB:</span>

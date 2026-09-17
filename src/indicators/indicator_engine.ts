@@ -10,6 +10,10 @@ export interface IndicatorEngineState {
   fibLevels: { ratio: number; price: number; label: string }[];
   zeroLagMAs: { ma20: number; ma50: number; ma200: number };
   adaptiveRsi: number;
+  kalmanPrice?: number;
+  garchVol?: number;
+  vpin?: number;
+  avellanedaReservation?: number;
 }
 
 export class IndicatorEngine {
@@ -25,6 +29,21 @@ export class IndicatorEngine {
   private vwapCumVolume = 0;
   private vwapCumPriceVol = 0;
   private currentVwap = 0;
+
+  // Real-time Kalman Filter Micro-Trend state (1D state space)
+  private kalmanPrice = 0;
+  private kalmanVelocity = 0;
+  private kalmanP = 1.0;
+  private readonly kalmanQ = 0.0004; // Process variance
+  private readonly kalmanR = 0.015;  // Measurement noise
+
+  // GARCH(1,1) Conditional Volatility state
+  private garchVariance = 0.0000008;
+  private prevGarchPrice = 0;
+
+  // Kaufman Adaptive Moving Average (KAMA) state
+  private kamaPrice = 0;
+  private kamaER = 0.5;
 
   public update(
     book: OrderBookL2 | null,
@@ -151,9 +170,112 @@ export class IndicatorEngine {
       { feature: 'Spoof Risk', weight: 0.10 },
     ];
 
-    // Build the Complete 22-Indicator Matrix across the 5 Planes
+    // 12. GARCH(1,1) Conditional Volatility Forecast
+    if (this.prevGarchPrice > 0) {
+      const logReturn = Math.log(midPrice / this.prevGarchPrice);
+      const omega = 0.00000008;
+      const alpha = 0.09;
+      const beta = 0.88;
+      this.garchVariance = omega + alpha * Math.pow(logReturn, 2) + beta * this.garchVariance;
+    }
+    this.prevGarchPrice = midPrice;
+    const garchVolAnn = Math.min(150, Math.max(15, Math.sqrt(this.garchVariance * 252 * 24 * 60) * 100));
+
+    // 13. Avellaneda-Stoikov Reservation Price & Optimal Spread
+    const inventoryQ = Math.max(-5, Math.min(5, Math.round(wasmMetrics.ofi * 1.5)));
+    const gammaAversion = 0.08;
+    const kappaIntensity = 1.4;
+    const localVolStd = Math.max(0.5, Math.sqrt(this.garchVariance) * midPrice);
+    const avellanedaReservation = midPrice - (inventoryQ * gammaAversion * Math.pow(localVolStd, 2) * 0.005);
+    const optimalHalfSpread = Math.max(
+      0.5,
+      (gammaAversion * Math.pow(localVolStd, 2) * 0.0025) + (1 / gammaAversion) * Math.log(1 + gammaAversion / kappaIntensity)
+    );
+
+    // 14. Order Book Depth Curvature & Liquidity Slope
+    let bookCurvature = 0.38;
+    let curvatureLabel = 'Convex Buffer';
+    if (book && book.bids.length >= 3 && book.asks.length >= 3) {
+      const b0 = book.bids[0].quantity;
+      const b1 = b0 + book.bids[1].quantity;
+      const b2 = b1 + book.bids[2].quantity;
+      const d2b = (b2 - b1) - (b1 - b0);
+
+      const a0 = book.asks[0].quantity;
+      const a1 = a0 + book.asks[1].quantity;
+      const a2 = a1 + book.asks[2].quantity;
+      const d2a = (a2 - a1) - (a1 - a0);
+
+      const totalDepth = b2 + a2 || 1;
+      bookCurvature = (d2b + d2a) / totalDepth;
+      curvatureLabel = bookCurvature >= 0 ? 'Convex Buffer' : 'Concave Risk';
+    }
+
+    // 15. Corwin-Schultz (2012) Dual High-Low Volatility Spread Estimator
+    let csSpreadPct = 0.00075;
+    let csSpreadDollar = midPrice * csSpreadPct;
+    if (this.priceHistory.length >= 20) {
+      const p1 = this.priceHistory.slice(-20, -10);
+      const p2 = this.priceHistory.slice(-10);
+      const h1 = Math.max(...p1);
+      const l1 = Math.min(...p1);
+      const h2 = Math.max(...p2);
+      const l2 = Math.min(...p2);
+      const h12 = Math.max(h1, h2);
+      const l12 = Math.min(l1, l2);
+
+      if (l1 > 0 && l2 > 0 && l12 > 0 && h1 >= l1 && h2 >= l2) {
+        const beta = Math.pow(Math.log(h1 / l1), 2) + Math.pow(Math.log(h2 / l2), 2);
+        const gamma = Math.pow(Math.log(h12 / l12), 2);
+        const denom = 3 - 2 * Math.SQRT2;
+        const alpha = (Math.sqrt(2 * beta) - Math.sqrt(beta)) / denom - Math.sqrt(gamma / denom);
+        if (!isNaN(alpha) && isFinite(alpha)) {
+          const expA = Math.exp(alpha);
+          const rawCs = 2 * (expA - 1) / (1 + expA);
+          if (rawCs > 0 && rawCs < 0.05) {
+            csSpreadPct = rawCs;
+            csSpreadDollar = csSpreadPct * midPrice;
+          }
+        }
+      }
+    }
+
+    // 16. 1D Recursive Kalman Filter Micro-Trend Estimator
+    if (this.kalmanPrice === 0) {
+      this.kalmanPrice = midPrice;
+    }
+    const predX = this.kalmanPrice + this.kalmanVelocity;
+    const predP = this.kalmanP + this.kalmanQ;
+    const K = predP / (predP + this.kalmanR);
+    const innovation = midPrice - predX;
+    const prevKalman = this.kalmanPrice;
+    this.kalmanPrice = predX + K * innovation;
+    this.kalmanVelocity = 0.85 * this.kalmanVelocity + 0.15 * (this.kalmanPrice - prevKalman);
+    this.kalmanP = (1 - K) * predP;
+
+    // 17. Kaufman Adaptive Moving Average (KAMA)
+    if (this.kamaPrice === 0) {
+      this.kamaPrice = midPrice;
+    }
+    if (this.priceHistory.length >= 11) {
+      const window = this.priceHistory.slice(-11);
+      const change = Math.abs(window[window.length - 1] - window[0]);
+      let volSum = 0;
+      for (let i = 1; i < window.length; i++) {
+        volSum += Math.abs(window[i] - window[i - 1]);
+      }
+      this.kamaER = volSum > 0 ? Math.min(1.0, change / volSum) : 0;
+      const fastSC = 2 / (2 + 1);
+      const slowSC = 2 / (30 + 1);
+      const sc = Math.pow(this.kamaER * (fastSC - slowSC) + slowSC, 2);
+      this.kamaPrice += sc * (midPrice - this.kamaPrice);
+    } else {
+      this.kamaPrice = midPrice;
+    }
+
+    // Build the Complete 30-Indicator Matrix across the 5 Planes
     const indicators: IndicatorSpec[] = [
-      // Plane 1: Microstructure/Depth (8)
+      // Plane 1: Microstructure/Depth (12)
       {
         id: 'vol_heatmap',
         name: 'Volumetric Liquidity Heatmap',
@@ -226,8 +348,44 @@ export class IndicatorEngine {
         status: wasmMetrics.kylesLambda > 0.0004 ? 'warning' : 'neutral',
         color: wasmMetrics.kylesLambda > 0.0004 ? '#ff0055' : '#00f3ff',
       },
+      {
+        id: 'vpin',
+        name: 'VPIN Flow Toxicity (Easley)',
+        plane: 'Microstructure/Depth',
+        description: 'Volume-synchronized probability of adverse selection & informed toxicity',
+        currentValue: `${(wasmMetrics.vpin * 100).toFixed(1)}%`,
+        status: wasmMetrics.vpin > 0.55 ? 'warning' : 'active',
+        color: wasmMetrics.vpin > 0.55 ? '#ff0055' : wasmMetrics.vpin > 0.40 ? '#ffb700' : '#00ff88',
+      },
+      {
+        id: 'avellaneda_stoikov',
+        name: 'Avellaneda-Stoikov Indifference',
+        plane: 'Microstructure/Depth',
+        description: 'Optimal HFT inventory reservation price & market making equilibrium spread',
+        currentValue: `$${avellanedaReservation.toFixed(1)} (±$${optimalHalfSpread.toFixed(2)})`,
+        status: 'active',
+        color: '#00f3ff',
+      },
+      {
+        id: 'roll_spread',
+        name: 'Roll (1984) Effective Spread',
+        plane: 'Microstructure/Depth',
+        description: 'Serial covariance estimator measuring implicit bid-ask bounce friction',
+        currentValue: `$${wasmMetrics.rollSpread.toFixed(2)} (${((wasmMetrics.rollSpread / (midPrice || 1)) * 10000).toFixed(1)} bps)`,
+        status: wasmMetrics.rollSpread > (book?.spread ?? 2) * 2.5 ? 'warning' : 'neutral',
+        color: '#ffb700',
+      },
+      {
+        id: 'book_curvature',
+        name: 'Depth Curvature (d²Q/dP²)',
+        plane: 'Microstructure/Depth',
+        description: 'Order book depth convexity: positive buffers cushion; negative thins out',
+        currentValue: `${bookCurvature >= 0 ? '+' : ''}${bookCurvature.toFixed(2)} (${curvatureLabel})`,
+        status: bookCurvature < -0.2 ? 'warning' : 'active',
+        color: bookCurvature >= 0 ? '#00ff88' : '#ff0055',
+      },
 
-      // Plane 2: Point Processes/Regimes (4)
+      // Plane 2: Point Processes/Regimes (5)
       {
         id: 'hawkes_intensity',
         name: 'Hawkes Cascade Intensity',
@@ -263,6 +421,15 @@ export class IndicatorEngine {
         currentValue: this.markovState,
         status: 'active',
         color: this.markovState === 'Trending' ? '#00ff88' : '#ffb700',
+      },
+      {
+        id: 'garch_vol',
+        name: 'GARCH(1,1) Conditional Volatility',
+        plane: 'Point Processes/Regimes',
+        description: 'Autoregressive conditional heteroskedasticity dynamic variance forecast',
+        currentValue: `${garchVolAnn.toFixed(1)}% Ann.`,
+        status: garchVolAnn > 65 ? 'warning' : 'active',
+        color: '#9d4edd',
       },
 
       // Plane 3: Spatial Probability/ML (4)
@@ -303,7 +470,7 @@ export class IndicatorEngine {
         color: '#00f3ff',
       },
 
-      // Plane 4: Auction Theory/Structure (4)
+      // Plane 4: Auction Theory/Structure (5)
       {
         id: 'rl_fibonacci',
         name: 'RL Adaptive Fibonacci Suite',
@@ -340,8 +507,17 @@ export class IndicatorEngine {
         status: 'neutral',
         color: '#9d4edd',
       },
+      {
+        id: 'corwin_schultz',
+        name: 'Corwin-Schultz High-Low Spread',
+        plane: 'Auction Theory/Structure',
+        description: 'Dual-period high-low volatility variance estimator of bid-ask spread',
+        currentValue: `${(csSpreadPct * 100).toFixed(3)}% ($${csSpreadDollar.toFixed(2)})`,
+        status: 'active',
+        color: '#ffb700',
+      },
 
-      // Plane 5: Trend & Momentum (2)
+      // Plane 5: Trend & Momentum (4)
       {
         id: 'zero_lag_ma',
         name: 'Zero-Lag Trend MAs (20/50/200)',
@@ -360,6 +536,24 @@ export class IndicatorEngine {
         status: this.rsiValue > 70 || this.rsiValue < 30 ? 'warning' : 'neutral',
         color: this.rsiValue > 70 ? '#ff0055' : this.rsiValue < 30 ? '#00ff88' : '#f0f4f8',
       },
+      {
+        id: 'kalman_trend',
+        name: '1D Kalman Micro-Trend Filter',
+        plane: 'Trend/Momentum',
+        description: 'Zero-lag recursive state-space filter estimating unobserved equilibrium price',
+        currentValue: `$${this.kalmanPrice.toFixed(1)} (${this.kalmanVelocity >= 0 ? '+' : ''}${this.kalmanVelocity.toFixed(2)}/s)`,
+        status: 'active',
+        color: this.kalmanVelocity >= 0 ? '#00ff88' : '#ff0055',
+      },
+      {
+        id: 'kaufman_ama',
+        name: 'Kaufman Adaptive MA (KAMA)',
+        plane: 'Trend/Momentum',
+        description: 'Dynamic efficiency-ratio smoothing accelerating in trends, slowing in noise',
+        currentValue: `$${this.kamaPrice.toFixed(1)} (ER: ${this.kamaER.toFixed(2)})`,
+        status: 'active',
+        color: '#00f3ff',
+      },
     ];
 
     return {
@@ -370,6 +564,10 @@ export class IndicatorEngine {
       fibLevels,
       zeroLagMAs: { ma20, ma50, ma200 },
       adaptiveRsi: this.rsiValue,
+      kalmanPrice: this.kalmanPrice,
+      garchVol: garchVolAnn,
+      vpin: wasmMetrics.vpin,
+      avellanedaReservation,
     };
   }
 }

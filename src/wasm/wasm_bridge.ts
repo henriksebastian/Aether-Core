@@ -11,6 +11,8 @@ export interface WASMMicrostructureMetrics {
   queuePriority: number;
   shannonEntropy: number;
   hawkesIntensity: number;
+  vpin: number;
+  rollSpread: number;
   lastUpdateNs: number;
   eventCount: number;
 }
@@ -34,6 +36,16 @@ export class AetherWasmBridge {
   private queueAheadVol = 12.5;
   private eventCount = 0;
 
+  // VPIN & Roll spread microstructure states
+  private bucketVolume = 3.5;
+  private currentBucketBuy = 0;
+  private currentBucketSell = 0;
+  private vpinBuckets: number[] = [];
+  private currentVpin = 0.285;
+  private tradePriceDeltas: number[] = [];
+  private prevTradePrice = 0;
+  private currentRollSpread = 0.85;
+
   // Layout offsets in 64-byte aligned header
   // [0]: write_idx (i32)
   // [1]: read_idx (i32)
@@ -46,6 +58,8 @@ export class AetherWasmBridge {
   // [5]: queue_priority
   // [6]: shannon_entropy
   // [7]: hawkes_intensity
+  // [8]: vpin
+  // [9]: roll_spread
 
   constructor(capacity = 4096) {
     const headerSize = 128; // 128 bytes header
@@ -73,6 +87,8 @@ export class AetherWasmBridge {
     this.headerI32[1] = 0; // read_idx
     this.headerI32[2] = capacity;
     this.headerI32[3] = packetSize;
+    this.headerF64[8] = 0.285; // initial vpin
+    this.headerF64[9] = 0.85;  // initial rollSpread
   }
 
   public getRawBuffer(): SharedArrayBuffer | ArrayBuffer {
@@ -132,7 +148,7 @@ export class AetherWasmBridge {
   }
 
   /**
-   * Process Trade event into ring buffer & update Kyle's Lambda / Queue priority
+   * Process Trade event into ring buffer & update Kyle's Lambda / Queue priority / VPIN / Roll spread
    */
   public pushTradeEvent(
     price: number,
@@ -178,6 +194,63 @@ export class AetherWasmBridge {
     }
     this.prevMidP = price;
 
+    // Update Roll Spread (1984) via serial covariance of trade price changes
+    if (this.prevTradePrice > 0) {
+      const dP = price - this.prevTradePrice;
+      this.tradePriceDeltas.push(dP);
+      if (this.tradePriceDeltas.length > 30) {
+        this.tradePriceDeltas.shift();
+      }
+      if (this.tradePriceDeltas.length >= 6) {
+        let sum1 = 0, sum2 = 0;
+        const n = this.tradePriceDeltas.length - 1;
+        for (let i = 0; i < n; i++) {
+          sum1 += this.tradePriceDeltas[i + 1];
+          sum2 += this.tradePriceDeltas[i];
+        }
+        const mean1 = sum1 / n;
+        const mean2 = sum2 / n;
+        let cov = 0;
+        for (let i = 0; i < n; i++) {
+          cov += (this.tradePriceDeltas[i + 1] - mean1) * (this.tradePriceDeltas[i] - mean2);
+        }
+        cov /= Math.max(1, n - 1);
+        if (cov < 0) {
+          const rawRoll = 2.0 * Math.sqrt(-cov);
+          this.currentRollSpread = 0.85 * this.currentRollSpread + 0.15 * rawRoll;
+        }
+      }
+    }
+    this.prevTradePrice = price;
+
+    // Update VPIN (Volume-Synchronized Probability of Toxicity)
+    let remainingVol = size;
+    while (remainingVol > 0) {
+      const currentTotal = this.currentBucketBuy + this.currentBucketSell;
+      const space = this.bucketVolume - currentTotal;
+      const fill = Math.min(space, remainingVol);
+      if (side === 'buy') {
+        this.currentBucketBuy += fill;
+      } else {
+        this.currentBucketSell += fill;
+      }
+      remainingVol -= fill;
+
+      if (this.currentBucketBuy + this.currentBucketSell >= this.bucketVolume - 1e-6) {
+        const imbalance = Math.abs(this.currentBucketBuy - this.currentBucketSell);
+        this.vpinBuckets.push(imbalance);
+        if (this.vpinBuckets.length > 20) {
+          this.vpinBuckets.shift();
+        }
+        const sumImbalance = this.vpinBuckets.reduce((a, b) => a + b, 0);
+        const rawVpin = sumImbalance / (this.vpinBuckets.length * this.bucketVolume);
+        this.currentVpin = Math.max(0.02, Math.min(0.98, 0.8 * this.currentVpin + 0.2 * rawVpin));
+
+        this.currentBucketBuy = 0;
+        this.currentBucketSell = 0;
+      }
+    }
+
     // Update simulated Queue Priority
     if (side === 'buy') {
       this.queueAheadVol = Math.max(0, this.queueAheadVol - size * 0.4);
@@ -187,6 +260,8 @@ export class AetherWasmBridge {
     // Write zero-copy into shared buffer header
     this.headerF64[4] = this.currentLambda;
     this.headerF64[5] = priorityFraction;
+    this.headerF64[8] = this.currentVpin;
+    this.headerF64[9] = this.currentRollSpread;
 
     const writeIdx = this.headerI32[0];
     this.headerI32[0] = (writeIdx + 1) % this.headerI32[2];
@@ -203,6 +278,8 @@ export class AetherWasmBridge {
       queuePriority: this.headerF64[5] || 0.5,
       shannonEntropy: this.headerF64[6] || 0.72,
       hawkesIntensity: this.headerF64[7] || 0.45,
+      vpin: this.headerF64[8] || this.currentVpin,
+      rollSpread: this.headerF64[9] || this.currentRollSpread,
       lastUpdateNs: Date.now() * 1_000_000,
       eventCount: this.eventCount,
     };

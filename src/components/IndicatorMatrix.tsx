@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { IndicatorSpec, IndicatorCategory } from '../types/market';
-import { AlertCircle, CheckCircle, Info, ChevronDown, ChevronUp, Layers } from 'lucide-react';
+import { AlertCircle, CheckCircle, Info, ChevronDown, ChevronUp, Layers, ChevronsUpDown } from 'lucide-react';
 
 interface IndicatorMatrixProps {
   indicators: IndicatorSpec[];
@@ -10,8 +10,8 @@ interface IndicatorMatrixProps {
   onToggleCollapse?: () => void;
 }
 
-const PLANES: (IndicatorCategory | 'ALL (22)')[] = [
-  'ALL (22)',
+const PLANES: (IndicatorCategory | 'ALL')[] = [
+  'ALL',
   'Microstructure/Depth',
   'Point Processes/Regimes',
   'Spatial Probability/ML',
@@ -26,10 +26,58 @@ export const IndicatorMatrix: React.FC<IndicatorMatrixProps> = ({
   isCollapsed = false,
   onToggleCollapse,
 }) => {
-  const [selectedPlane, setSelectedPlane] = useState<IndicatorCategory | 'ALL (22)'>('ALL (22)');
+  const [selectedPlane, setSelectedPlane] = useState<IndicatorCategory | 'ALL'>('ALL');
+
+  // Resizable height state (persisted to localStorage)
+  const [height, setHeight] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('aether_indicator_matrix_height');
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 110 && parsed <= 750) {
+          return parsed;
+        }
+      }
+    }
+    return 220;
+  });
+
+  const [isResizing, setIsResizing] = useState(false);
+  const dragStartYRef = useRef(0);
+  const dragStartHeightRef = useRef(220);
+
+  const handleResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    dragStartYRef.current = e.clientY;
+    dragStartHeightRef.current = height;
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const onMouseMove = (e: MouseEvent) => {
+      const dy = dragStartYRef.current - e.clientY; // dragging up increases panel height
+      const maxHeight = Math.round(window.innerHeight * 0.72);
+      const newHeight = Math.max(110, Math.min(maxHeight, dragStartHeightRef.current + dy));
+      setHeight(newHeight);
+    };
+
+    const onMouseUp = () => {
+      setIsResizing(false);
+      localStorage.setItem('aether_indicator_matrix_height', height.toString());
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+  }, [isResizing, height]);
 
   const filtered =
-    selectedPlane === 'ALL (22)'
+    selectedPlane === 'ALL'
       ? indicators
       : indicators.filter((ind) => ind.plane === selectedPlane);
 
@@ -42,7 +90,7 @@ export const IndicatorMatrix: React.FC<IndicatorMatrixProps> = ({
             className="flex items-center gap-1 text-[#06b6d4] font-bold hover:text-[#dee2f1] transition-colors"
           >
             <ChevronUp size={12} />
-            <span>22-INDICATOR QUANT MATRIX</span>
+            <span>{indicators.length}-INDICATOR QUANT MATRIX</span>
           </button>
           <span className="text-[#64748b]">| Active Persona: <strong className="text-[#dee2f1]">{activePersona}</strong></span>
         </div>
@@ -58,13 +106,35 @@ export const IndicatorMatrix: React.FC<IndicatorMatrixProps> = ({
   }
 
   return (
-    <div className="h-48 border-t border-[#1b2232] bg-[#090e18] flex flex-col select-none font-mono text-[11px] shrink-0 transition-all">
+    <div
+      className={`border-t border-[#1b2232] bg-[#090e18] flex flex-col select-none font-mono text-[11px] shrink-0 relative ${
+        isResizing ? 'cursor-row-resize' : 'transition-[height] duration-75'
+      }`}
+      style={{ height: `${height}px` }}
+    >
+      {/* Resizable Top Drag Handle Bar */}
+      <div
+        onMouseDown={handleResizeMouseDown}
+        onDoubleClick={() => {
+          const def = 220;
+          setHeight(def);
+          localStorage.setItem('aether_indicator_matrix_height', def.toString());
+        }}
+        className="group h-2 w-full bg-[#0c1320] hover:bg-[#06b6d4]/30 active:bg-[#06b6d4] border-b border-[#1b2232] cursor-row-resize flex items-center justify-center transition-colors z-20 select-none"
+        title="Drag up or down to resize bottom indicator matrix (Double-click to reset)"
+      >
+        <div className="flex gap-1 items-center opacity-40 group-hover:opacity-100 transition-opacity">
+          <ChevronsUpDown size={9} className="text-[#64748b] group-hover:text-[#dee2f1]" />
+          <div className="w-8 h-0.5 bg-[#64748b] group-hover:bg-[#dee2f1] rounded-full" />
+        </div>
+      </div>
+
       {/* Plane Switcher Tabs Header */}
       <div className="flex items-center justify-between px-3 h-7 border-b border-[#1b2232] bg-[#0e131d]">
         <div className="flex items-center gap-1 overflow-x-auto">
           {PLANES.map((plane) => {
             const count =
-              plane === 'ALL (22)'
+              plane === 'ALL'
                 ? indicators.length
                 : indicators.filter((i) => i.plane === plane).length;
 
@@ -86,6 +156,43 @@ export const IndicatorMatrix: React.FC<IndicatorMatrixProps> = ({
         </div>
 
         <div className="flex items-center gap-3 text-[10px]">
+          {/* Quick Size Presets */}
+          <div className="hidden sm:flex items-center gap-1 border border-[#1b2232] bg-[#090e18] rounded-sm px-1 py-0.2 text-[8.5px] text-[#64748b]">
+            <span className="text-[8px] uppercase tracking-wider text-[#475569]">PANEL:</span>
+            <button
+              onClick={() => {
+                setHeight(135);
+                localStorage.setItem('aether_indicator_matrix_height', '135');
+              }}
+              className={`px-1 hover:text-[#dee2f1] transition-colors ${height <= 150 ? 'text-[#06b6d4] font-bold' : ''}`}
+              title="Compact (1 Row)"
+            >
+              SM
+            </button>
+            <span className="text-[#1b2232]">|</span>
+            <button
+              onClick={() => {
+                setHeight(220);
+                localStorage.setItem('aether_indicator_matrix_height', '220');
+              }}
+              className={`px-1 hover:text-[#dee2f1] transition-colors ${height > 150 && height < 320 ? 'text-[#06b6d4] font-bold' : ''}`}
+              title="Default (2 Rows)"
+            >
+              MD
+            </button>
+            <span className="text-[#1b2232]">|</span>
+            <button
+              onClick={() => {
+                setHeight(380);
+                localStorage.setItem('aether_indicator_matrix_height', '380');
+              }}
+              className={`px-1 hover:text-[#dee2f1] transition-colors ${height >= 320 ? 'text-[#06b6d4] font-bold' : ''}`}
+              title="Expanded (Full View)"
+            >
+              LG
+            </button>
+          </div>
+
           <div className="text-[#64748b]">
             PRIORITY: <strong className="text-[#06b6d4]">{activePersona.toUpperCase()}</strong>
           </div>

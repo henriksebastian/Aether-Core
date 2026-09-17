@@ -76,7 +76,7 @@ export const App: React.FC = () => {
         );
       }
 
-      // Update 22-Indicator Matrix
+      // Update Multi-Plane Quantitative Indicator Matrix
       if (indicatorEngineRef.current) {
         const ind = indicatorEngineRef.current.update(
           snap.orderBook,
@@ -183,6 +183,7 @@ export const App: React.FC = () => {
 
         {/* Right Dock: Order Book DOM & Real-Time Trade Tape */}
         <OrderBookDOM
+          symbol={symbol}
           orderBook={snapshot?.orderBook ?? null}
           recentTrades={snapshot?.recentTrades ?? []}
           microPrice={snapshot?.wasmMetrics.microPrice ?? 0}

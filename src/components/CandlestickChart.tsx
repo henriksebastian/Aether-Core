@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { MarketTick, OrderBookL2 } from '../types/market';
 import { fetchBinanceHistoricalKlines } from '../ingestion/binance_rest';
+import { getInstrument } from '../data/market_directory';
 import { computeMonteCarloForecast, MonteCarloForecast } from '../indicators/monte_carlo';
 import { SignalPositionHUD, ActiveSimPosition, RiskTier } from './SignalPositionHUD';
 
@@ -76,10 +77,33 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
   // Monte Carlo 3,000-Path Forecast State
   const [mcForecast, setMcForecast] = useState<MonteCarloForecast | null>(null);
 
-  // Base price reference for realistic fallback pre-population
-  const fallbackBase = orderBook?.midPrice || (symbol === 'ETHUSDT' ? 2420 : symbol === 'SOLUSDT' ? 98 : 76200);
+  // User Configurable Target R:R Ratio (e.g. 1.5, 2.0, 3.0, 4.0, 5.0)
+  const [targetRR, setTargetRR] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('aether_target_rr_ratio');
+      if (saved) {
+        const parsed = parseFloat(saved);
+        if (!isNaN(parsed) && parsed >= 1.0 && parsed <= 10.0) return parsed;
+      }
+    } catch {
+      // fallback
+    }
+    return 3.0;
+  });
 
+  const handleRRChange = (newRR: number) => {
+    const clamped = Math.max(1.0, Math.min(10.0, Math.round(newRR * 10) / 10));
+    setTargetRR(clamped);
+    try {
+      localStorage.setItem('aether_target_rr_ratio', clamped.toString());
+    } catch {
+      // ignore
+    }
+  };
 
+  // Base price reference dynamically resolved from market directory and live order book
+  const inst = getInstrument(symbol);
+  const fallbackBase = orderBook?.midPrice || inst.referencePrice;
 
   // Fetch real Binance klines whenever symbol or timeframe changes
   useEffect(() => {
@@ -97,30 +121,31 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
         const tfMs = TIMEFRAME_MS[timeframe];
         const now = Date.now();
         const initialCandles: Candle[] = [];
+        const factor = Math.pow(10, inst.decimals);
 
-        let currentPrice = fallbackBase * 0.985;
+        let currentPrice = fallbackBase * (1 - inst.volatility * 0.015);
         const startTime = now - count * tfMs;
 
         for (let i = 0; i < count; i++) {
           const cTime = startTime + i * tfMs;
-          const volatility = currentPrice * 0.0018;
-          const change = (Math.random() - 0.48) * volatility;
-          const open = currentPrice;
-          const close = open + change;
-          const high = Math.max(open, close) + Math.random() * volatility * 0.8;
-          const low = Math.min(open, close) - Math.random() * volatility * 0.8;
-          const volume = Math.round((2.5 + Math.random() * 8.5) * 100) / 100;
+          const volInterval = (inst.volatility / Math.sqrt(252 * 24 * (3600000 / tfMs))) * 0.8;
+          const change = (Math.random() - 0.495) * currentPrice * volInterval;
+          const open = Math.round(currentPrice * factor) / factor;
+          const close = Math.round(Math.max(inst.tickSize, open + change) * factor) / factor;
+          const high = Math.round((Math.max(open, close) + Math.random() * open * volInterval * 0.8) * factor) / factor;
+          const low = Math.round(Math.max(inst.tickSize, Math.min(open, close) - Math.random() * open * volInterval * 0.8) * factor) / factor;
+          const volume = Math.round((inst.lotSize * (2.5 + Math.random() * 12.5)) * 10) / 10;
           const isBuy = close >= open;
 
           initialCandles.push({
             time: cTime,
-            open: Math.round(open * 100) / 100,
-            high: Math.round(high * 100) / 100,
-            low: Math.round(low * 100) / 100,
-            close: Math.round(close * 100) / 100,
+            open,
+            high,
+            low,
+            close,
             volume,
-            buyVolume: isBuy ? volume * 0.7 : volume * 0.3,
-            sellVolume: isBuy ? volume * 0.3 : volume * 0.7,
+            buyVolume: Math.round((isBuy ? volume * 0.65 : volume * 0.35) * 10) / 10,
+            sellVolume: Math.round((isBuy ? volume * 0.35 : volume * 0.65) * 10) / 10,
           });
 
           currentPrice = close;
@@ -285,12 +310,13 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       symbol,
       timeframe,
       18,
-      3000
+      3000,
+      targetRR
     );
     if (forecast) {
       setMcForecast(forecast);
     }
-  }, [candles, symbol, timeframe, ofi, microPrice]);
+  }, [candles, symbol, timeframe, ofi, microPrice, targetRR]);
 
   const currentSpotPrice = candles.length > 0 ? candles[candles.length - 1].close : fallbackBase;
   const unitLabel = symbol.replace('USDT', '');
@@ -626,15 +652,15 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
 
       // TP Label
       ctx.fillStyle = '#089981';
-      ctx.fillText(`TARGET EXIT (3:1 R:R / +3R): $${mcForecast.targetTP.toFixed(2)} (+${mcForecast.expectedGainPct.toFixed(2)}%)`, chartWidth - 8, Math.round(tpY) - 5);
+      ctx.fillText(`TARGET EXIT (${targetRR.toFixed(1)}:1 R:R / +${targetRR.toFixed(1)}R): ${inst.currencySymbol}${mcForecast.targetTP.toFixed(inst.decimals)} (+${mcForecast.expectedGainPct.toFixed(2)}%)`, chartWidth - 8, Math.round(tpY) - 5);
 
       // Entry Label
       ctx.fillStyle = '#06b6d4';
-      ctx.fillText(`ENTRY (SPOT): $${latestPrice.toFixed(2)}`, chartWidth - 8, Math.round(entryY) - 4);
+      ctx.fillText(`ENTRY (SPOT): ${inst.currencySymbol}${latestPrice.toFixed(inst.decimals)}`, chartWidth - 8, Math.round(entryY) - 4);
 
       // SL Label
       ctx.fillStyle = '#f23645';
-      ctx.fillText(`STOP LOSS (-1R RISK): $${mcForecast.targetSL.toFixed(2)} (-${mcForecast.riskLossPct.toFixed(2)}%)`, chartWidth - 8, Math.round(slY) + 12);
+      ctx.fillText(`STOP LOSS (-1R RISK): ${inst.currencySymbol}${mcForecast.targetSL.toFixed(inst.decimals)} (-${mcForecast.riskLossPct.toFixed(2)}%)`, chartWidth - 8, Math.round(slY) + 12);
 
       // Terminal Right Axis Target Badges
       ctx.textAlign = 'left';
@@ -643,19 +669,19 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       ctx.fillStyle = '#089981';
       ctx.fillRect(chartWidth + 2, Math.round(tpY) - 7, rightAxisWidth - 4, 15);
       ctx.fillStyle = '#ffffff';
-      ctx.fillText(`TP 3:1 ${mcForecast.targetTP.toFixed(1)}`, chartWidth + 4, Math.round(tpY) + 4);
+      ctx.fillText(`TP ${targetRR.toFixed(1)}R ${mcForecast.targetTP.toFixed(Math.min(2, inst.decimals))}`, chartWidth + 4, Math.round(tpY) + 4);
 
       // Entry Badge
       ctx.fillStyle = '#06b6d4';
       ctx.fillRect(chartWidth + 2, Math.round(entryY) - 7, rightAxisWidth - 4, 15);
       ctx.fillStyle = '#ffffff';
-      ctx.fillText(`ENTRY ${latestPrice.toFixed(1)}`, chartWidth + 4, Math.round(entryY) + 4);
+      ctx.fillText(`ENTRY ${latestPrice.toFixed(Math.min(2, inst.decimals))}`, chartWidth + 4, Math.round(entryY) + 4);
 
       // SL Risk Badge
       ctx.fillStyle = '#f23645';
       ctx.fillRect(chartWidth + 2, Math.round(slY) - 7, rightAxisWidth - 4, 15);
       ctx.fillStyle = '#ffffff';
-      ctx.fillText(`SL 1R ${mcForecast.targetSL.toFixed(1)}`, chartWidth + 4, Math.round(slY) + 4);
+      ctx.fillText(`SL 1R ${mcForecast.targetSL.toFixed(Math.min(2, inst.decimals))}`, chartWidth + 4, Math.round(slY) + 4);
     }
 
     // 6. Draw Active Simulated Position Target & Entry Lines
@@ -1022,6 +1048,46 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
           >
             ● VOL
           </button>
+
+          {/* Quick R:R Ratio Target Selector Ribbon */}
+          <div className="flex items-center gap-1 bg-[#090e18] border border-[#1b2232] px-1.5 py-0.5 ml-1">
+            <span className="text-[9px] font-bold text-[#64748b] tracking-wider uppercase mr-0.5">
+              R:R
+            </span>
+            {[1.5, 2.0, 3.0, 4.0, 5.0].map((ratio) => (
+              <button
+                key={ratio}
+                onClick={() => handleRRChange(ratio)}
+                className={`px-1.5 py-0.2 text-[9px] font-mono font-bold transition-all ${
+                  Math.abs(targetRR - ratio) < 0.05
+                    ? 'bg-[#089981]/25 text-[#089981] border-b border-[#089981]'
+                    : 'text-[#64748b] hover:text-[#dee2f1]'
+                }`}
+                title={`Set Target R:R to ${ratio.toFixed(1)}:1`}
+              >
+                {ratio.toFixed(1)}R
+              </button>
+            ))}
+            <div className="flex items-center border-l border-[#1b2232] pl-1 ml-0.5 gap-0.5">
+              <button
+                onClick={() => handleRRChange(targetRR - 0.5)}
+                className="px-1 text-[9px] font-mono text-[#64748b] hover:text-[#089981]"
+                title="Decrease R:R by 0.5R"
+              >
+                -
+              </button>
+              <span className="px-1 text-[9px] font-mono font-bold text-[#089981]">
+                {targetRR.toFixed(1)}:1
+              </span>
+              <button
+                onClick={() => handleRRChange(targetRR + 0.5)}
+                className="px-1 text-[9px] font-mono text-[#64748b] hover:text-[#089981]"
+                title="Increase R:R by 0.5R"
+              >
+                +
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Position Overlay Toggle, View Mode & Quick Stats */}
@@ -1145,6 +1211,8 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
             ofi={ofi}
             mcForecast={mcForecast}
             activePosition={activeSimPosition}
+            targetRR={targetRR}
+            onTargetRRChange={handleRRChange}
             onExecuteTrade={handleExecuteTrade}
             onClosePosition={handleClosePosition}
             onLockBreakeven={handleLockBreakeven}

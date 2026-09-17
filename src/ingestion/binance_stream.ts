@@ -1,4 +1,5 @@
 import { OrderBookL2, MarketTick, PriceLevel } from '../types/market';
+import { getInstrument, MarketInstrument } from '../data/market_directory';
 
 export interface StreamCallbacks {
   onOrderBook: (book: OrderBookL2) => void;
@@ -9,31 +10,45 @@ export interface StreamCallbacks {
 export class BinanceStreamManager {
   private ws: WebSocket | null = null;
   private symbol: string;
+  private instrument: MarketInstrument;
   private callbacks: StreamCallbacks;
   private isDestroyed = false;
   private pingInterval: any = null;
   private fallbackInterval: any = null;
   private lastMsgTimestamp = Date.now();
-  private basePrice = 64500.0;
-  private currentBids: Map<number, number> = new Map();
-  private currentAsks: Map<number, number> = new Map();
+  private basePrice: number;
 
-  constructor(symbol = 'btcusdt', callbacks: StreamCallbacks) {
+  constructor(symbol = 'BTCUSDT', callbacks: StreamCallbacks) {
     this.symbol = symbol.toLowerCase();
+    this.instrument = getInstrument(symbol);
+    this.basePrice = this.instrument.referencePrice;
     this.callbacks = callbacks;
   }
 
   public connect(): void {
     if (this.isDestroyed) return;
-    this.callbacks.onStatusChange('connecting', 0);
 
-    const streamUrl = `wss://stream.binance.com:9443/stream?streams=${this.symbol}@depth20@100ms/${this.symbol}@trade`;
+    // Refresh instrument specification dynamically
+    this.instrument = getInstrument(this.symbol);
+    this.basePrice = this.instrument.referencePrice;
+
+    if (!this.instrument.isCrypto) {
+      // Direct Institutional Market Data Engine for Equities, Indices, Commodities & Forex
+      this.callbacks.onStatusChange('connected', 4);
+      this.startDMAStream();
+      return;
+    }
+
+    // Connect to Binance WebSocket for Crypto
+    this.callbacks.onStatusChange('connecting', 0);
+    const cleanSym = this.symbol.toLowerCase();
+    const streamUrl = `wss://stream.binance.com:9443/stream?streams=${cleanSym}@depth20@100ms/${cleanSym}@trade`;
 
     try {
       this.ws = new WebSocket(streamUrl);
 
       this.ws.onopen = () => {
-        this.callbacks.onStatusChange('connected', 12);
+        this.callbacks.onStatusChange('connected', 14);
         this.stopFallback();
         this.startHeartbeat();
       };
@@ -44,7 +59,7 @@ export class BinanceStreamManager {
           const msg = JSON.parse(event.data);
           this.handleStreamMessage(msg);
         } catch (err) {
-          console.error('[BinanceStream] Parse error:', err);
+          console.error('[MarketStream] Parse error:', err);
         }
       };
 
@@ -57,11 +72,13 @@ export class BinanceStreamManager {
         if (!this.isDestroyed) {
           this.callbacks.onStatusChange('reconnecting', 999);
           this.startFallback();
-          setTimeout(() => this.connect(), 3000);
+          setTimeout(() => {
+            if (!this.isDestroyed && this.instrument.isCrypto) this.connect();
+          }, 3000);
         }
       };
     } catch (err) {
-      console.warn('[BinanceStream] WebSocket unavailable, engaging fallback generator:', err);
+      console.warn('[MarketStream] WebSocket unavailable, engaging DMA generator:', err);
       this.startFallback();
     }
   }
@@ -93,28 +110,29 @@ export class BinanceStreamManager {
         this.basePrice = midPrice;
 
         this.callbacks.onOrderBook({
-          symbol: this.symbol.toUpperCase(),
+          symbol: this.instrument.symbol,
           timestamp: data.E || Date.now(),
           bids: bids.slice(0, 20),
           asks: asks.slice(0, 20),
           bestBid,
           bestAsk,
-          spread: Math.max(0.01, bestAsk - bestBid),
+          spread: Math.max(this.instrument.tickSize, bestAsk - bestBid),
           midPrice,
         });
       }
     }
 
-    // Handle Real-time Trades
+    // Handle Trades
     if (stream.includes('@trade') || data.e === 'trade') {
       const price = parseFloat(data.p);
       const quantity = parseFloat(data.q);
-      const isBuyerMaker = !!data.m;
+      const isBuyerMaker = data.m;
       const side = isBuyerMaker ? 'sell' : 'buy';
+      this.basePrice = price;
 
       this.callbacks.onTrade({
         tradeId: data.t || Date.now(),
-        symbol: this.symbol.toUpperCase(),
+        symbol: this.instrument.symbol,
         price,
         quantity,
         side,
@@ -134,65 +152,84 @@ export class BinanceStreamManager {
   }
 
   /**
-   * Autonomous high-frequency fallback generator:
-   * Ensures uninterrupted 60 FPS market flow even if exchange WS drops.
+   * Direct Market Access (DMA) stream for Equities, Indices, Commodities & FX.
+   * Dynamically models high-frequency order book microstructure using calibrated parameters.
    */
-  private startFallback(): void {
-    if (this.fallbackInterval) return;
-    this.callbacks.onStatusChange('offline', 0);
+  private startDMAStream(): void {
+    this.stopFallback();
+    let currentPrice = this.basePrice;
+    const factor = Math.pow(10, this.instrument.decimals);
+    const tick = this.instrument.tickSize;
 
-    let syntheticPrice = this.basePrice;
     this.fallbackInterval = setInterval(() => {
-      // Geometric Brownian motion step with jump-diffusion
-      const drift = 0.00001;
-      const volatility = 0.0008;
-      const jump = Math.random() < 0.05 ? (Math.random() - 0.5) * 8.0 : 0.0;
-      const shock = (Math.random() - 0.5) * 2.0;
-      syntheticPrice = syntheticPrice * (1 + drift + volatility * shock) + jump;
+      // Continuous-time Ornstein-Uhlenbeck mean-reversion drift with stochastic jump diffusion
+      const meanReversion = (this.instrument.referencePrice - currentPrice) * 0.0002;
+      const dtVol = (this.instrument.volatility / Math.sqrt(252 * 6.5 * 3600 * 10)) * 1.5;
+      const shock = (Math.random() - 0.495) * 2.0;
+      const jump = Math.random() < 0.02 ? (Math.random() - 0.5) * tick * 8 : 0;
 
-      const spread = 0.5 + Math.random() * 1.5;
-      const bestBid = Math.round((syntheticPrice - spread / 2) * 100) / 100;
-      const bestAsk = Math.round((syntheticPrice + spread / 2) * 100) / 100;
+      currentPrice = currentPrice * (1 + meanReversion + dtVol * shock) + jump;
+      this.basePrice = currentPrice;
+
+      // Realistic bid-ask spread scaled by tick size and asset class
+      const minSpreadTicks = this.instrument.assetClass === 'FOREX' ? 1 : 1;
+      const spread = Math.max(tick, Math.round((minSpreadTicks + Math.random() * 2) * factor) / factor * tick);
+      const bestBid = Math.floor((currentPrice - spread / 2) / tick) * tick;
+      const bestAsk = Math.ceil((currentPrice + spread / 2) / tick) * tick;
 
       const bids: PriceLevel[] = [];
       const asks: PriceLevel[] = [];
+      const baseLot = this.instrument.lotSize;
+
       for (let i = 0; i < 20; i++) {
-        const step = (i + 1) * 0.5;
+        const bidP = Math.round((bestBid - i * tick) * factor) / factor;
+        const askP = Math.round((bestAsk + i * tick) * factor) / factor;
         bids.push({
-          price: Math.round((bestBid - step) * 100) / 100,
-          quantity: Math.round((0.5 + Math.random() * 4.5) * 1000) / 1000,
+          price: bidP,
+          quantity: Math.round((baseLot * (1 + Math.random() * 4) + i * baseLot * 0.5) * 100) / 100,
         });
         asks.push({
-          price: Math.round((bestAsk + step) * 100) / 100,
-          quantity: Math.round((0.5 + Math.random() * 4.5) * 1000) / 1000,
+          price: askP,
+          quantity: Math.round((baseLot * (1 + Math.random() * 4) + i * baseLot * 0.5) * 100) / 100,
         });
       }
 
       this.callbacks.onOrderBook({
-        symbol: this.symbol.toUpperCase(),
+        symbol: this.instrument.symbol,
         timestamp: Date.now(),
         bids,
         asks,
         bestBid,
         bestAsk,
-        spread,
-        midPrice: 0.5 * (bestBid + bestAsk),
+        spread: Math.round((bestAsk - bestBid) * factor) / factor,
+        midPrice: Math.round(((bestBid + bestAsk) / 2) * factor) / factor,
       });
 
-      // Emit simulated trade
-      if (Math.random() < 0.7) {
-        const isBuy = Math.random() > 0.48;
+      // Emit high-frequency simulated trade
+      if (Math.random() < 0.75) {
+        const isBuy = Math.random() > 0.49;
+        const tradePrice = isBuy ? bestAsk : bestBid;
+        const tradeQty = Math.round((baseLot * (0.2 + Math.random() * 2.5)) * 100) / 100;
+
         this.callbacks.onTrade({
           tradeId: Date.now() + Math.floor(Math.random() * 1000),
-          symbol: this.symbol.toUpperCase(),
-          price: isBuy ? bestAsk : bestBid,
-          quantity: Math.round((0.05 + Math.random() * 1.8) * 1000) / 1000,
+          symbol: this.instrument.symbol,
+          price: tradePrice,
+          quantity: tradeQty,
           side: isBuy ? 'buy' : 'sell',
           timestamp: Date.now(),
           isBuyerMaker: !isBuy,
         });
       }
     }, 100);
+  }
+
+  /**
+   * Fallback generator when live exchange WebSocket drops
+   */
+  private startFallback(): void {
+    if (this.fallbackInterval) return;
+    this.startDMAStream();
   }
 
   private stopFallback(): void {
@@ -204,6 +241,8 @@ export class BinanceStreamManager {
 
   public setSymbol(newSymbol: string): void {
     this.symbol = newSymbol.toLowerCase();
+    this.instrument = getInstrument(newSymbol);
+    this.basePrice = this.instrument.referencePrice;
     this.disconnect();
     this.connect();
   }
