@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <rect width="512" height="512" rx="100" fill="#090e18"/>
+  <!-- Subtle dark inner glow/border -->
+  <rect x="8" y="8" width="496" height="496" rx="92" fill="none" stroke="#00f3ff" stroke-opacity="0.15" stroke-width="4"/>
+  
+  <g transform="translate(0, 0)">
+    <!-- Clean minimalist geometric A symbol combining delta/candlestick -->
+    <path d="M 256 96 L 396 380 H 332 L 256 216 L 180 380 H 116 Z" fill="#00f3ff"/>
+    <!-- Precision cyan accent line across delta -->
+    <rect x="190" y="290" width="132" height="24" rx="4" fill="#090e18"/>
+    <rect x="200" y="296" width="112" height="12" rx="2" fill="#00ff88"/>
+  </g>
+</svg>
