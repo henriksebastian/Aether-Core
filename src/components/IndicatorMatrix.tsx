@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { IndicatorSpec, IndicatorCategory } from '../types/market';
-import { AlertCircle, CheckCircle, Info } from 'lucide-react';
+import { AlertCircle, CheckCircle, Info, ChevronDown, ChevronUp, Layers } from 'lucide-react';
 
 interface IndicatorMatrixProps {
   indicators: IndicatorSpec[];
   onIndicatorClick?: (id: string) => void;
   activePersona: string;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 const PLANES: (IndicatorCategory | 'ALL (22)')[] = [
@@ -21,6 +23,8 @@ export const IndicatorMatrix: React.FC<IndicatorMatrixProps> = ({
   indicators,
   onIndicatorClick,
   activePersona,
+  isCollapsed = false,
+  onToggleCollapse,
 }) => {
   const [selectedPlane, setSelectedPlane] = useState<IndicatorCategory | 'ALL (22)'>('ALL (22)');
 
@@ -29,8 +33,32 @@ export const IndicatorMatrix: React.FC<IndicatorMatrixProps> = ({
       ? indicators
       : indicators.filter((ind) => ind.plane === selectedPlane);
 
+  if (isCollapsed) {
+    return (
+      <div className="h-7 border-t border-[#1b2232] bg-[#0e131d] px-3 flex items-center justify-between font-mono text-[10px] select-none shrink-0">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onToggleCollapse}
+            className="flex items-center gap-1 text-[#06b6d4] font-bold hover:text-[#dee2f1] transition-colors"
+          >
+            <ChevronUp size={12} />
+            <span>22-INDICATOR QUANT MATRIX</span>
+          </button>
+          <span className="text-[#64748b]">| Active Persona: <strong className="text-[#dee2f1]">{activePersona}</strong></span>
+        </div>
+
+        <button
+          onClick={onToggleCollapse}
+          className="px-2 py-0.5 text-[9px] bg-[#1b202a] text-[#94a3b8] hover:text-[#dee2f1] border border-[#1b2232] rounded-sm transition-colors"
+        >
+          EXPAND MATRIX [▲]
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="h-56 border-t border-[#1b2232] bg-[#090e18] flex flex-col select-none font-mono text-[11px] shrink-0">
+    <div className="h-48 border-t border-[#1b2232] bg-[#090e18] flex flex-col select-none font-mono text-[11px] shrink-0 transition-all">
       {/* Plane Switcher Tabs Header */}
       <div className="flex items-center justify-between px-3 h-7 border-b border-[#1b2232] bg-[#0e131d]">
         <div className="flex items-center gap-1 overflow-x-auto">
@@ -57,8 +85,19 @@ export const IndicatorMatrix: React.FC<IndicatorMatrixProps> = ({
           })}
         </div>
 
-        <div className="text-[10px] text-[#64748b]">
-          PRIORITY ENGINE: <strong className="text-[#06b6d4]">{activePersona.toUpperCase()}</strong>
+        <div className="flex items-center gap-3 text-[10px]">
+          <div className="text-[#64748b]">
+            PRIORITY: <strong className="text-[#06b6d4]">{activePersona.toUpperCase()}</strong>
+          </div>
+          {onToggleCollapse && (
+            <button
+              onClick={onToggleCollapse}
+              className="p-0.5 text-[#64748b] hover:text-[#dee2f1] border border-[#1b2232] rounded-sm"
+              title="Collapse Indicator Matrix (Unclutter View)"
+            >
+              <ChevronDown size={12} />
+            </button>
+          )}
         </div>
       </div>
 

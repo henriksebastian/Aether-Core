@@ -23,6 +23,10 @@ export interface MonteCarloForecast {
     unit: string;
   };
   riskRewardRatio: number;
+  realizedVolatility: number;
+  kellyFraction: number;
+  microDrift: number;
+  projectedSharpe: number;
 }
 
 /**
@@ -114,13 +118,20 @@ export function computeMonteCarloForecast(
   }
 
   const winProbability = winCount / paths;
-  const targetTP = p75[steps - 1];
-  const targetSL = p25[steps - 1];
-  const expectedGainUSD = Math.max(0, targetTP - spotPrice);
-  const expectedGainPct = (expectedGainUSD / spotPrice) * 100;
-  const riskLossUSD = Math.max(0, spotPrice - targetSL);
-  const riskLossPct = (riskLossUSD / spotPrice) * 100;
-  const riskRewardRatio = riskLossUSD > 0 ? expectedGainUSD / riskLossUSD : 1.5;
+
+  // 1R Stop Loss Risk Calibration (P25 quantile boundary)
+  const rawSLDelta = Math.max(spotPrice * 0.0035, spotPrice - p25[steps - 1]);
+  const targetSL = Math.round((spotPrice - rawSLDelta) * 100) / 100;
+  const riskLossUSD = Math.round((spotPrice - targetSL) * 100) / 100;
+  const riskLossPct = Math.round((riskLossUSD / spotPrice) * 10000) / 100;
+
+  // Minimum 3.0:1 Reward-to-Risk Ratio Target Calibration (+3R Exit Target)
+  const minGain3R = riskLossUSD * 3.0;
+  const rawTP = Math.max(p75[steps - 1], spotPrice + minGain3R);
+  const targetTP = Math.round(rawTP * 100) / 100;
+  const expectedGainUSD = Math.round((targetTP - spotPrice) * 100) / 100;
+  const expectedGainPct = Math.round((expectedGainUSD / spotPrice) * 10000) / 100;
+  const riskRewardRatio = riskLossUSD > 0 ? Math.round((expectedGainUSD / riskLossUSD) * 100) / 100 : 3.0;
 
   // 6. Signal & Confidence Synthesis
   let signal: 'STRONG BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG SELL' = 'NEUTRAL';
@@ -135,10 +146,18 @@ export function computeMonteCarloForecast(
     confidence = Math.min(65, confidence);
   }
 
-  // 7. Volatility-Adjusted Recommendation Sizing
+  // 7. Kelly Criterion & Volatility-Adjusted Recommendation Sizing
+  const b = Math.max(0.5, riskRewardRatio);
+  const p = winProbability;
+  const q = 1 - p;
+  const rawKelly = (b * p - q) / b;
+  const kellyFraction = Math.max(0.02, Math.min(0.25, rawKelly * 0.5)); // Half-Kelly safety factor
+  const projectedSharpe = realizedVol > 0 ? Math.round(((drift / realizedVol) * Math.sqrt(365 * 24 * 60)) * 100) / 100 : 1.45;
+
   const unit = symbol.replace('USDT', '');
-  const targetNotional = symbol.startsWith('BTC') ? 25000 : symbol.startsWith('ETH') ? 12000 : 8000;
-  const quantity = Math.round((targetNotional / spotPrice) * 100) / 100;
+  const baseAccountEquity = 100000; // $100,000 reference portfolio
+  const targetNotional = Math.round(baseAccountEquity * kellyFraction);
+  const quantity = Math.round((targetNotional / spotPrice) * 1000) / 1000;
 
   return {
     p05,
@@ -163,5 +182,9 @@ export function computeMonteCarloForecast(
       unit,
     },
     riskRewardRatio,
+    realizedVolatility: Math.round(realizedVol * 1000) / 10,
+    kellyFraction: Math.round(kellyFraction * 1000) / 10,
+    microDrift: Math.round(drift * 10000) / 100,
+    projectedSharpe,
   };
 }

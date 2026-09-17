@@ -11,7 +11,8 @@ import {
 import '@xyflow/react/dist/style.css';
 import { CodeGeneratorService, StrategyGraphRule } from './code_generators';
 import { SnarkProverService, ZKProofPayload } from './zksnark/snark_prover';
-import { Code, ShieldCheck, Play, CheckCircle2, Copy, Terminal, X } from 'lucide-react';
+import { LiveStrategyEvaluationState } from './strategy_evaluator';
+import { Code, ShieldCheck, Play, CheckCircle2, Copy, Terminal, X, Zap, Activity, Check } from 'lucide-react';
 
 const initialNodes: Node[] = [
   {
@@ -83,7 +84,10 @@ export const StrategyNodeCompilerModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
   personaDefaultTarget?: string;
-}> = ({ isOpen, onClose, personaDefaultTarget }) => {
+  liveStrategyState?: LiveStrategyEvaluationState | null;
+  onToggleAutoExecute?: () => void;
+  onApplyRules?: (rules: StrategyGraphRule) => void;
+}> = ({ isOpen, onClose, personaDefaultTarget, liveStrategyState, onToggleAutoExecute, onApplyRules }) => {
   const [nodes] = useNodesState(initialNodes);
   const [edges] = useEdgesState(initialEdges);
   const [activeTab, setActiveTab] = useState<'cpp' | 'python' | 'zksnark'>(
@@ -96,6 +100,7 @@ export const StrategyNodeCompilerModal: React.FC<{
   const [isProving, setIsProving] = useState(false);
   const [proofResult, setProofResult] = useState<ZKProofPayload | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isApplied, setIsApplied] = useState(false);
 
   // Close on Escape key
   useEffect(() => {
@@ -139,6 +144,14 @@ export const StrategyNodeCompilerModal: React.FC<{
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleApplyToEngine = () => {
+    if (onApplyRules) {
+      onApplyRules(currentRules);
+    }
+    setIsApplied(true);
+    setTimeout(() => setIsApplied(false), 2500);
+  };
+
   return (
     <div
       className="modal-overlay"
@@ -180,11 +193,50 @@ export const StrategyNodeCompilerModal: React.FC<{
           </ReactFlow>
 
           {/* Strategy Flow Banner Tag */}
-          <div className="absolute top-2 left-3 bg-[#0e131d] px-2.5 py-1 text-[10px] font-mono border border-[#1b2232] text-[#94a3b8] z-10">
-            Active Strategy Pipeline: <span className="text-[#06b6d4] font-bold">Hawkes_Cascade</span> ➔{' '}
-            <span className="text-[#f59e0b] font-bold">Fib_0.618</span> ➔{' '}
-            <span className="text-[#8b5cf6] font-bold">Gravity_Vector</span> ➔{' '}
-            <span className="text-[#089981] font-bold">IOC_AGG_BUY</span>
+          <div className="absolute top-2 left-3 bg-[#0e131d]/90 px-2.5 py-1 text-[10px] font-mono border border-[#1b2232] text-[#94a3b8] z-10 flex items-center gap-2 backdrop-blur-sm">
+            <span>Pipeline:</span>
+            <span className={liveStrategyState?.isHawkesMet ? 'text-[#089981] font-bold' : 'text-[#06b6d4]'}>
+              Hawkes_Cascade {liveStrategyState ? `(${liveStrategyState.currentHawkes})` : ''}
+            </span>
+            <span>➔</span>
+            <span className="text-[#f59e0b] font-bold">Fib_0.618</span>
+            <span>➔</span>
+            <span className={liveStrategyState?.isGravityMet ? 'text-[#089981] font-bold' : 'text-[#8b5cf6]'}>
+              Gravity_Vector {liveStrategyState ? `(${liveStrategyState.currentGravity})` : ''}
+            </span>
+            <span>➔</span>
+            <span className={liveStrategyState?.isAllConditionsMet ? 'text-[#089981] font-extrabold animate-pulse' : 'text-[#089981]'}>
+              IOC_AGG_BUY
+            </span>
+          </div>
+
+          {/* Live Engine Action Strip */}
+          <div className="absolute top-2 right-3 z-10 flex items-center gap-1.5 font-mono text-[9px]">
+            {onToggleAutoExecute && (
+              <button
+                onClick={onToggleAutoExecute}
+                className={`px-2 py-1 font-bold border transition-colors flex items-center gap-1 ${
+                  liveStrategyState?.isAutoExecuteEnabled
+                    ? 'bg-[#089981]/25 border-[#089981] text-[#089981]'
+                    : 'bg-[#0e131d]/90 border-[#1b2232] text-[#64748b] hover:text-[#dee2f1]'
+                }`}
+              >
+                <Zap size={10} />
+                AUTO-EXECUTE: {liveStrategyState?.isAutoExecuteEnabled ? 'ACTIVE [ON]' : 'OFF'}
+              </button>
+            )}
+
+            <button
+              onClick={handleApplyToEngine}
+              className={`px-2.5 py-1 font-bold border rounded transition-all flex items-center gap-1 shadow-lg ${
+                isApplied
+                  ? 'bg-[#089981] text-[#090e18] border-[#089981]'
+                  : 'bg-[#06b6d4]/20 hover:bg-[#06b6d4]/35 text-[#06b6d4] border-[#06b6d4]/60'
+              }`}
+            >
+              {isApplied ? <Check size={11} /> : <Activity size={11} />}
+              {isApplied ? 'DEPLOYED TO ENGINE' : '⚡ APPLY & RUN LIVE IN ENGINE'}
+            </button>
           </div>
         </div>
 
@@ -226,6 +278,11 @@ export const StrategyNodeCompilerModal: React.FC<{
             </div>
 
             <div className="flex items-center gap-2">
+              {liveStrategyState && (
+                <span className="text-[9px] text-[#64748b] mr-1">
+                  Live Execs: <strong className="text-[#089981]">{liveStrategyState.executionCount}</strong> ({liveStrategyState.simulatedLatencyMicroseconds}µs)
+                </span>
+              )}
               {activeTab === 'zksnark' && (
                 <button
                   onClick={handleGenerateProof}

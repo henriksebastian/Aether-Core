@@ -9,6 +9,8 @@ import { OrderBookDOM } from './components/OrderBookDOM';
 import { IndicatorMatrix } from './components/IndicatorMatrix';
 import { ReplayDock } from './components/ReplayDock';
 import { StrategyNodeCompilerModal } from './strategy_compiler/NodeCanvas';
+import { LiveStrategyEngine, LiveStrategyEvaluationState } from './strategy_compiler/strategy_evaluator';
+import { StrategyGraphRule } from './strategy_compiler/code_generators';
 import { TelemetryMetrics, TraderPersona } from './types/market';
 
 export const App: React.FC = () => {
@@ -19,6 +21,13 @@ export const App: React.FC = () => {
   const [isStrategyOpen, setIsStrategyOpen] = useState(false);
   const [isReplayOpen, setIsReplayOpen] = useState(false);
   const [tickCount, setTickCount] = useState(0);
+
+  // Unclutter & Focus States
+  const [isCleanMode, setIsCleanMode] = useState(false);
+  const [isMatrixCollapsed, setIsMatrixCollapsed] = useState(false);
+
+  // Live Strategy Compiler State
+  const [liveStrategyState, setLiveStrategyState] = useState<LiveStrategyEvaluationState | null>(null);
 
   const [telemetry, setTelemetry] = useState<TelemetryMetrics>({
     timeInTradeSec: 85,
@@ -39,10 +48,12 @@ export const App: React.FC = () => {
   const duckDbRef = useRef<DuckDBStorageService | null>(null);
   const telemetryTrackerRef = useRef<TelemetryTracker | null>(null);
   const indicatorEngineRef = useRef<IndicatorEngine | null>(null);
+  const liveStrategyEngineRef = useRef<LiveStrategyEngine | null>(null);
 
   useEffect(() => {
     duckDbRef.current = new DuckDBStorageService();
     indicatorEngineRef.current = new IndicatorEngine();
+    liveStrategyEngineRef.current = new LiveStrategyEngine();
     telemetryTrackerRef.current = new TelemetryTracker((metrics) => {
       setTelemetry(metrics);
     });
@@ -75,6 +86,16 @@ export const App: React.FC = () => {
         );
         setIndicatorState(ind);
       }
+
+      // Live Strategy Compiler Evaluation
+      if (liveStrategyEngineRef.current && snap.wasmMetrics) {
+        const evalState = liveStrategyEngineRef.current.evaluate(
+          snap.orderBook,
+          snap.recentTrades,
+          snap.wasmMetrics
+        );
+        setLiveStrategyState(evalState);
+      }
     });
 
     return () => {
@@ -100,6 +121,32 @@ export const App: React.FC = () => {
     console.log('[DuckDB Scrubber] Replay scrubbed to:', pct);
   };
 
+  const handleToggleCleanMode = () => {
+    setIsCleanMode((prev) => {
+      const next = !prev;
+      setIsMatrixCollapsed(next);
+      return next;
+    });
+  };
+
+  const handleToggleMatrixCollapse = () => {
+    setIsMatrixCollapsed((prev) => !prev);
+  };
+
+  const handleToggleAutoExecute = () => {
+    if (liveStrategyEngineRef.current) {
+      const curr = liveStrategyState?.isAutoExecuteEnabled ?? false;
+      liveStrategyEngineRef.current.setAutoExecute(!curr);
+      setLiveStrategyState((prev) => (prev ? { ...prev, isAutoExecuteEnabled: !curr } : null));
+    }
+  };
+
+  const handleApplyRules = (rules: StrategyGraphRule) => {
+    if (liveStrategyEngineRef.current) {
+      liveStrategyEngineRef.current.setRule(rules);
+    }
+  };
+
   const activePersona = telemetry.activePersona;
 
   return (
@@ -115,6 +162,9 @@ export const App: React.FC = () => {
         onOpenStrategyCompiler={() => setIsStrategyOpen(true)}
         onOpenReplayDock={() => setIsReplayOpen((prev) => !prev)}
         isReplayOpen={isReplayOpen}
+        liveStrategyState={liveStrategyState}
+        isCleanMode={isCleanMode}
+        onToggleCleanMode={handleToggleCleanMode}
       />
 
       {/* Main Workspace Body */}
@@ -142,12 +192,14 @@ export const App: React.FC = () => {
         />
       </div>
 
-      {/* Bottom: 22-Indicator Matrix Across 5 Planes */}
+      {/* Bottom: 22-Indicator Matrix Across 5 Planes (Collapsible for Uncluttered View) */}
       {indicatorState && (
         <IndicatorMatrix
           indicators={indicatorState.indicators}
           activePersona={activePersona}
           onIndicatorClick={() => telemetryTrackerRef.current?.recordIndicatorToggle()}
+          isCollapsed={isMatrixCollapsed}
+          onToggleCollapse={handleToggleMatrixCollapse}
         />
       )}
 
@@ -164,11 +216,14 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Strategy Node Compiler & zk-SNARK Verifier Modal */}
+      {/* Strategy Node Compiler & zk-SNARK Verifier Modal with Live Execution Engine */}
       <StrategyNodeCompilerModal
         isOpen={isStrategyOpen}
         onClose={() => setIsStrategyOpen(false)}
         personaDefaultTarget={activePersona}
+        liveStrategyState={liveStrategyState}
+        onToggleAutoExecute={handleToggleAutoExecute}
+        onApplyRules={handleApplyRules}
       />
     </div>
   );
