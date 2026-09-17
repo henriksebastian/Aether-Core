@@ -9,7 +9,11 @@ import {
   Coins,
   BarChart3,
   Flame,
-  ArrowRight,
+  ChevronRight,
+  Zap,
+  RefreshCw,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import {
   MARKET_INSTRUMENTS,
@@ -19,6 +23,7 @@ import {
   EXCHANGES,
   formatInstrumentPrice,
 } from '../data/market_directory';
+import { useLivePrices } from '../hooks/useLivePrices';
 
 interface MarketDirectoryModalProps {
   isOpen: boolean;
@@ -27,14 +32,36 @@ interface MarketDirectoryModalProps {
   onSelectInstrument: (symbol: string) => void;
 }
 
-const ASSET_CLASSES: { id: AssetClass | 'ALL'; label: string; icon: any }[] = [
-  { id: 'ALL', label: 'ALL ASSETS', icon: Globe },
-  { id: 'EQUITY', label: 'STOCKS (US & GLOBAL)', icon: Building2 },
-  { id: 'INDEX', label: 'INDICES & ETFS', icon: BarChart3 },
-  { id: 'COMMODITY', label: 'COMMODITIES & ENERGY', icon: Flame },
-  { id: 'FOREX', label: 'CURRENCIES (FX)', icon: TrendingUp },
-  { id: 'CRYPTO', label: 'CRYPTO ASSETS', icon: Coins },
+const ASSET_CLASSES: { id: AssetClass | 'ALL'; label: string; icon: any; color: string }[] = [
+  { id: 'ALL',       label: 'All',         icon: Globe,      color: '#06b6d4' },
+  { id: 'EQUITY',    label: 'Stocks',      icon: Building2,  color: '#3b82f6' },
+  { id: 'INDEX',     label: 'Indices',     icon: BarChart3,  color: '#8b5cf6' },
+  { id: 'COMMODITY', label: 'Commodities', icon: Flame,      color: '#f59e0b' },
+  { id: 'FOREX',     label: 'FX',          icon: TrendingUp, color: '#10b981' },
+  { id: 'CRYPTO',    label: 'Crypto',      icon: Coins,      color: '#f97316' },
 ];
+
+const EXCHANGE_BADGE_STYLES: Record<Exchange, { bg: string; text: string; border: string }> = {
+  NASDAQ:   { bg: 'rgba(6,182,212,0.12)',   text: '#22d3ee', border: 'rgba(6,182,212,0.3)'   },
+  NYSE:     { bg: 'rgba(59,130,246,0.12)',  text: '#60a5fa', border: 'rgba(59,130,246,0.3)'  },
+  LSE:      { bg: 'rgba(245,158,11,0.12)',  text: '#fbbf24', border: 'rgba(245,158,11,0.3)'  },
+  EURONEXT: { bg: 'rgba(139,92,246,0.12)',  text: '#a78bfa', border: 'rgba(139,92,246,0.3)'  },
+  XETRA:    { bg: 'rgba(16,185,129,0.12)',  text: '#34d399', border: 'rgba(16,185,129,0.3)'  },
+  TSE:      { bg: 'rgba(239,68,68,0.12)',   text: '#f87171', border: 'rgba(239,68,68,0.3)'   },
+  HKEX:     { bg: 'rgba(249,115,22,0.12)',  text: '#fb923c', border: 'rgba(249,115,22,0.3)'  },
+  NSE:      { bg: 'rgba(99,102,241,0.12)',  text: '#818cf8', border: 'rgba(99,102,241,0.3)'  },
+  CME:      { bg: 'rgba(20,184,166,0.12)',  text: '#2dd4bf', border: 'rgba(20,184,166,0.3)'  },
+  FOREX:    { bg: 'rgba(16,185,129,0.12)',  text: '#34d399', border: 'rgba(16,185,129,0.3)'  },
+  BINANCE:  { bg: 'rgba(234,179,8,0.12)',   text: '#facc15', border: 'rgba(234,179,8,0.3)'   },
+};
+
+const ASSET_CLASS_COLOR: Record<AssetClass, string> = {
+  EQUITY:    '#60a5fa',
+  INDEX:     '#a78bfa',
+  COMMODITY: '#fbbf24',
+  FOREX:     '#34d399',
+  CRYPTO:    '#fb923c',
+};
 
 export const MarketDirectoryModal: React.FC<MarketDirectoryModalProps> = ({
   isOpen,
@@ -42,15 +69,16 @@ export const MarketDirectoryModal: React.FC<MarketDirectoryModalProps> = ({
   activeSymbol,
   onSelectInstrument,
 }) => {
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery]           = useState('');
   const [selectedAssetClass, setSelectedAssetClass] = useState<AssetClass | 'ALL'>('ALL');
   const [selectedExchange, setSelectedExchange] = useState<Exchange | 'ALL'>('ALL');
   const [highlightedIndex, setHighlightedIndex] = useState(0);
 
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const { prices: livePrices, isLoading: pricesLoading, lastUpdated, hasError, refresh } = useLivePrices();
+
+  const searchInputRef   = useRef<HTMLInputElement | null>(null);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
 
-  // Focus search input when modal opens
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => {
@@ -65,30 +93,18 @@ export const MarketDirectoryModal: React.FC<MarketDirectoryModalProps> = ({
     }
   }, [isOpen]);
 
-  // Filter instruments based on search and selected categories
   const filteredInstruments = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-
     return MARKET_INSTRUMENTS.filter((inst) => {
-      // Asset class filter
-      if (selectedAssetClass !== 'ALL' && inst.assetClass !== selectedAssetClass) {
-        return false;
-      }
-
-      // Exchange filter
-      if (selectedExchange !== 'ALL' && inst.exchange !== selectedExchange) {
-        return false;
-      }
-
-      // Search query filter
+      if (selectedAssetClass !== 'ALL' && inst.assetClass !== selectedAssetClass) return false;
+      if (selectedExchange !== 'ALL' && inst.exchange !== selectedExchange) return false;
       if (!q) return true;
-
       return (
-        inst.symbol.toLowerCase().includes(q) ||
-        inst.name.toLowerCase().includes(q) ||
-        inst.sector.toLowerCase().includes(q) ||
-        inst.exchange.toLowerCase().includes(q) ||
-        inst.currency.toLowerCase().includes(q) ||
+        inst.symbol.toLowerCase().includes(q)   ||
+        inst.name.toLowerCase().includes(q)      ||
+        inst.sector.toLowerCase().includes(q)    ||
+        inst.exchange.toLowerCase().includes(q)  ||
+        inst.currency.toLowerCase().includes(q)  ||
         inst.region.toLowerCase().includes(q)
       );
     });
@@ -97,7 +113,6 @@ export const MarketDirectoryModal: React.FC<MarketDirectoryModalProps> = ({
   // Keyboard navigation
   useEffect(() => {
     if (!isOpen) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -116,107 +131,160 @@ export const MarketDirectoryModal: React.FC<MarketDirectoryModalProps> = ({
         }
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, filteredInstruments, highlightedIndex, onClose, onSelectInstrument]);
 
-  // Ensure highlighted item stays in view
   useEffect(() => {
     if (listContainerRef.current) {
       const activeEl = listContainerRef.current.children[highlightedIndex] as HTMLElement;
-      if (activeEl) {
-        activeEl.scrollIntoView({ block: 'nearest' });
-      }
+      if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
     }
   }, [highlightedIndex]);
 
   if (!isOpen) return null;
 
+  const activeClass = ASSET_CLASSES.find((ac) => ac.id === selectedAssetClass);
+
   const modalContent = (
     <div
-      className="select-none font-mono text-[11px]"
       style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 99999,
-        backgroundColor: 'rgba(0, 0, 0, 0.85)',
-        backdropFilter: 'blur(4px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '16px',
+        position: 'fixed', inset: 0, zIndex: 99999,
+        backgroundColor: 'rgba(0,0,0,0.80)',
+        backdropFilter: 'blur(6px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '24px',
       }}
       onClick={onClose}
     >
       <div
-        className="flex flex-col bg-[#080d16] border border-[#1b2232] shadow-2xl rounded-none overflow-hidden"
         style={{
-          width: '100%',
-          maxWidth: '820px',
-          height: 'auto',
-          maxHeight: 'min(82vh, 650px)',
-          display: 'flex',
-          flexDirection: 'column',
+          width: '100%', maxWidth: '860px',
+          maxHeight: 'min(85vh, 680px)',
+          display: 'flex', flexDirection: 'column',
           backgroundColor: '#080d16',
-          border: '1px solid #1b2232',
-          boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.95), 0 0 25px rgba(6, 182, 212, 0.15)',
+          border: '1px solid #1e2a3d',
+          boxShadow: '0 32px 64px -12px rgba(0,0,0,0.96), 0 0 0 1px rgba(6,182,212,0.08), 0 0 40px rgba(6,182,212,0.06)',
           overflow: 'hidden',
-          zIndex: 100000,
+          fontFamily: '"JetBrains Mono", monospace',
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* 1. Modal Header Bar */}
-        <div className="flex items-center justify-between px-4 py-2.5 bg-[#0e131d] border-b border-[#1b2232] shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-2.5 h-2.5 bg-[#089981] animate-pulse" />
-            <h2 className="text-xs font-bold tracking-wider text-[#dee2f1]">
-              GLOBAL MARKET DIRECTORY & EXCHANGE ROUTER
-            </h2>
-            <span className="text-[9px] px-1.5 py-0.5 bg-[#1b202a] text-[#06b6d4] border border-[#1b2232]">
-              {MARKET_INSTRUMENTS.length} INSTRUMENTS · 11 EXCHANGES
-            </span>
-          </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-[9px] text-[#64748b] hidden sm:inline">
-              [ESC] close · [↑/↓] navigate · [ENTER] select
+        {/* ── Header ── */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '14px 20px',
+          background: 'linear-gradient(135deg, #0c1422 0%, #0e1826 100%)',
+          borderBottom: '1px solid #1e2a3d',
+          flexShrink: 0,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{
+              width: 8, height: 8, borderRadius: '50%',
+              backgroundColor: hasError ? '#f23645' : '#089981',
+              boxShadow: `0 0 8px ${hasError ? '#f23645' : '#089981'}`,
+              animation: 'pulse 2s infinite',
+            }} />
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', color: '#dee2f1' }}>
+              GLOBAL MARKET DIRECTORY
+            </span>
+            <span style={{
+              fontSize: 9, fontWeight: 600, letterSpacing: '0.08em',
+              padding: '2px 8px',
+              background: 'rgba(6,182,212,0.1)',
+              color: '#06b6d4',
+              border: '1px solid rgba(6,182,212,0.25)',
+            }}>
+              {MARKET_INSTRUMENTS.length} INSTRUMENTS · {EXCHANGES.length} EXCHANGES
+            </span>
+            {/* Live feed status badge */}
+            {pricesLoading ? (
+              <span style={{ fontSize: 9, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <RefreshCw size={9} style={{ animation: 'spin 1s linear infinite' }} />
+                FETCHING
+              </span>
+            ) : hasError ? (
+              <span style={{ fontSize: 9, color: '#f23645', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <WifiOff size={9} /> OFFLINE · STATIC PRICES
+              </span>
+            ) : lastUpdated ? (
+              <span style={{ fontSize: 9, color: '#089981', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Wifi size={9} /> LIVE · {lastUpdated.toLocaleTimeString()}
+              </span>
+            ) : null}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: 9, color: '#475569', letterSpacing: '0.06em' }}>
+              ESC · ↑↓ · ENTER
             </span>
             <button
+              onClick={refresh}
+              title="Refresh live prices"
+              style={{
+                background: 'none', border: '1px solid #1e2a3d', cursor: 'pointer',
+                color: '#475569', padding: '3px 6px', display: 'flex', alignItems: 'center', gap: 4,
+                fontSize: 9, fontFamily: '"JetBrains Mono", monospace',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = '#06b6d4')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = '#475569')}
+            >
+              <RefreshCw size={10} style={{ animation: pricesLoading ? 'spin 1s linear infinite' : 'none' }} />
+              REFRESH
+            </button>
+            <button
               onClick={onClose}
-              className="p-1 text-[#64748b] hover:text-[#dee2f1] hover:bg-[#1b2232] transition-colors"
-              title="Close (ESC)"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: '#475569', padding: '4px', display: 'flex',
+                transition: 'color 0.15s',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = '#dee2f1')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = '#475569')}
             >
               <X size={15} />
             </button>
           </div>
         </div>
 
-        {/* 2. Search Input Bar */}
-        <div className="p-3 bg-[#0c121e] border-b border-[#1b2232] flex items-center gap-3 shrink-0">
-          <div className="relative flex-1 flex items-center">
-            <Search className="absolute left-3 text-[#64748b]" size={15} />
+        {/* ── Search Bar ── */}
+        <div style={{
+          padding: '12px 20px',
+          borderBottom: '1px solid #1e2a3d',
+          backgroundColor: '#090e18',
+          flexShrink: 0,
+        }}>
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <Search size={15} style={{ position: 'absolute', left: 14, color: '#475569', pointerEvents: 'none' }} />
             <input
               ref={searchInputRef}
               type="text"
               value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setHighlightedIndex(0);
+              onChange={(e) => { setSearchQuery(e.target.value); setHighlightedIndex(0); }}
+              placeholder="Search ticker, company, exchange or sector…"
+              style={{
+                width: '100%',
+                background: '#080d16',
+                border: '1px solid #1e2a3d',
+                outline: 'none',
+                padding: '10px 36px',
+                fontSize: 12,
+                color: '#dee2f1',
+                fontFamily: '"JetBrains Mono", monospace',
+                letterSpacing: '0.02em',
+                transition: 'border-color 0.15s',
+                boxSizing: 'border-box',
               }}
-              placeholder="Search ticker, company, exchange, sector (e.g. NVDA, Apple, LSE, Gold, EURUSD)..."
-              className="w-full bg-[#080d16] border border-[#1b2232] focus:border-[#06b6d4] pl-9 pr-8 py-2 text-xs text-[#dee2f1] placeholder-[#475569] outline-none transition-colors"
+              onFocus={(e) => (e.target.style.borderColor = '#06b6d4')}
+              onBlur={(e)  => (e.target.style.borderColor = '#1e2a3d')}
             />
             {searchQuery && (
               <button
-                onClick={() => {
-                  setSearchQuery('');
-                  searchInputRef.current?.focus();
+                onClick={() => { setSearchQuery(''); searchInputRef.current?.focus(); }}
+                style={{
+                  position: 'absolute', right: 12, background: 'none', border: 'none',
+                  cursor: 'pointer', color: '#475569', display: 'flex', padding: 2,
                 }}
-                className="absolute right-2.5 text-[#64748b] hover:text-[#dee2f1]"
               >
                 <X size={13} />
               </button>
@@ -224,65 +292,80 @@ export const MarketDirectoryModal: React.FC<MarketDirectoryModalProps> = ({
           </div>
         </div>
 
-        {/* 3. Asset Class & Exchange Filter Strips */}
-        <div className="flex flex-col border-b border-[#1b2232] bg-[#090e18] text-[10px] shrink-0">
-          {/* Asset Class Pills */}
-          <div className="flex items-center gap-1 px-3 py-1.5 overflow-x-auto border-b border-[#1b2232]/50">
-            <span className="text-[9px] uppercase tracking-wider text-[#475569] mr-1">ASSET:</span>
-            {ASSET_CLASSES.map((ac) => {
-              const Icon = ac.icon;
-              const isSelected = selectedAssetClass === ac.id;
-              return (
-                <button
-                  key={ac.id}
-                  onClick={() => {
-                    setSelectedAssetClass(ac.id);
-                    setHighlightedIndex(0);
-                  }}
-                  className={`px-2 py-0.5 flex items-center gap-1.5 whitespace-nowrap transition-colors border ${
-                    isSelected
-                      ? 'bg-[#1b202a] text-[#089981] border-[#089981] font-bold'
-                      : 'text-[#94a3b8] border-transparent hover:text-[#dee2f1] hover:bg-[#141a26]'
-                  }`}
-                >
-                  <Icon size={11} />
-                  <span>{ac.label}</span>
-                </button>
-              );
-            })}
-          </div>
+        {/* ── Asset Class Tabs ── */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 4,
+          padding: '10px 20px',
+          borderBottom: '1px solid #1e2a3d',
+          backgroundColor: '#080d16',
+          flexShrink: 0,
+          overflowX: 'auto',
+        }}>
+          {ASSET_CLASSES.map((ac) => {
+            const Icon    = ac.icon;
+            const active  = selectedAssetClass === ac.id;
+            return (
+              <button
+                key={ac.id}
+                onClick={() => { setSelectedAssetClass(ac.id); setHighlightedIndex(0); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '6px 14px',
+                  fontSize: 10, fontWeight: active ? 700 : 500,
+                  letterSpacing: '0.06em',
+                  fontFamily: '"JetBrains Mono", monospace',
+                  cursor: 'pointer',
+                  border: active ? `1px solid ${ac.color}` : '1px solid transparent',
+                  background: active ? `${ac.color}18` : 'transparent',
+                  color: active ? ac.color : '#64748b',
+                  transition: 'all 0.15s',
+                  whiteSpace: 'nowrap',
+                }}
+                onMouseEnter={(e) => { if (!active) { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.background = '#0e1624'; } }}
+                onMouseLeave={(e) => { if (!active) { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = 'transparent'; } }}
+              >
+                <Icon size={11} />
+                {ac.label}
+              </button>
+            );
+          })}
 
-          {/* Exchange Filter Chips */}
-          <div className="flex items-center gap-1 px-3 py-1 overflow-x-auto bg-[#070b13]">
-            <span className="text-[9px] uppercase tracking-wider text-[#475569] mr-1">VENUE:</span>
+          {/* Spacer + Exchange pills on the right */}
+          <div style={{ flex: 1 }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
             <button
-              onClick={() => {
-                setSelectedExchange('ALL');
-                setHighlightedIndex(0);
+              onClick={() => { setSelectedExchange('ALL'); setHighlightedIndex(0); }}
+              style={{
+                padding: '4px 10px', fontSize: 9, fontWeight: 600, cursor: 'pointer',
+                fontFamily: '"JetBrains Mono", monospace', letterSpacing: '0.06em',
+                border: selectedExchange === 'ALL' ? '1px solid #06b6d4' : '1px solid #1e2a3d',
+                background: selectedExchange === 'ALL' ? 'rgba(6,182,212,0.12)' : 'transparent',
+                color: selectedExchange === 'ALL' ? '#06b6d4' : '#475569',
+                transition: 'all 0.15s',
+                whiteSpace: 'nowrap',
               }}
-              className={`px-1.5 py-0.5 text-[9px] font-semibold whitespace-nowrap border transition-colors ${
-                selectedExchange === 'ALL'
-                  ? 'bg-[#06b6d4]/20 text-[#06b6d4] border-[#06b6d4]'
-                  : 'text-[#64748b] border-transparent hover:text-[#dee2f1]'
-              }`}
             >
-              ALL EXCHANGES
+              ALL
             </button>
             {EXCHANGES.map((ex) => {
-              const isSelected = selectedExchange === ex.id;
+              const active = selectedExchange === ex.id;
+              const style  = EXCHANGE_BADGE_STYLES[ex.id] || { bg: 'transparent', text: '#64748b', border: '#1e2a3d' };
               return (
                 <button
                   key={ex.id}
-                  onClick={() => {
-                    setSelectedExchange(ex.id);
-                    setHighlightedIndex(0);
-                  }}
-                  className={`px-1.5 py-0.5 text-[9px] whitespace-nowrap border transition-colors ${
-                    isSelected
-                      ? 'bg-[#06b6d4]/20 text-[#06b6d4] border-[#06b6d4] font-bold'
-                      : 'text-[#64748b] border-transparent hover:text-[#94a3b8]'
-                  }`}
                   title={`${ex.name} (${ex.country})`}
+                  onClick={() => { setSelectedExchange(ex.id); setHighlightedIndex(0); }}
+                  style={{
+                    padding: '4px 8px', fontSize: 9, fontWeight: 600, cursor: 'pointer',
+                    fontFamily: '"JetBrains Mono", monospace', letterSpacing: '0.05em',
+                    border: active ? `1px solid ${style.border}` : '1px solid transparent',
+                    background: active ? style.bg : 'transparent',
+                    color: active ? style.text : '#475569',
+                    transition: 'all 0.15s',
+                    whiteSpace: 'nowrap',
+                  }}
+                  onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = '#94a3b8'; }}
+                  onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = '#475569'; }}
                 >
                   {ex.id}
                 </button>
@@ -291,119 +374,173 @@ export const MarketDirectoryModal: React.FC<MarketDirectoryModalProps> = ({
           </div>
         </div>
 
-        {/* 4. Results Counter */}
-        <div className="px-4 py-1.5 bg-[#080d16] border-b border-[#1b2232] flex items-center justify-between text-[9.5px] text-[#64748b] shrink-0">
-          <span>
-            SHOWING <strong className="text-[#dee2f1]">{filteredInstruments.length}</strong> MATCHING INSTRUMENTS
+        {/* ── Results count bar ── */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '7px 20px',
+          backgroundColor: '#060b12',
+          borderBottom: '1px solid #1e2a3d',
+          flexShrink: 0,
+        }}>
+          <span style={{ fontSize: 9, color: '#475569', letterSpacing: '0.08em' }}>
+            <strong style={{ color: '#94a3b8' }}>{filteredInstruments.length}</strong>
+            &nbsp;INSTRUMENTS
+            {selectedAssetClass !== 'ALL' && (
+              <span style={{ color: activeClass?.color, marginLeft: 6 }}>
+                · {activeClass?.label.toUpperCase()}
+              </span>
+            )}
+            {selectedExchange !== 'ALL' && (
+              <span style={{ color: '#94a3b8', marginLeft: 6 }}>· {selectedExchange}</span>
+            )}
           </span>
-          <span>CLICK OR PRESS ENTER TO ROUTE TERMINAL FEED</span>
+          <span style={{ fontSize: 9, color: '#2a3a55', letterSpacing: '0.08em' }}>
+            CLICK OR ↵ TO ROUTE TERMINAL FEED
+          </span>
         </div>
 
-        {/* 5. Instruments List (Contained Scroll Area) */}
+        {/* ── Instrument List ── */}
         <div
           ref={listContainerRef}
-          className="overflow-y-auto divide-y divide-[#1b2232]/30 bg-[#080d16]"
           style={{
             flex: '1 1 auto',
-            maxHeight: '380px',
-            minHeight: '140px',
             overflowY: 'auto',
             backgroundColor: '#080d16',
           }}
         >
           {filteredInstruments.length === 0 ? (
-            <div className="py-12 flex flex-col items-center justify-center text-[#64748b] gap-2">
-              <Search size={22} className="opacity-40" />
-              <p className="text-xs">No matching instruments found for "{searchQuery}"</p>
+            <div style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              justifyContent: 'center', gap: 12, padding: '60px 20px',
+            }}>
+              <Search size={28} style={{ color: '#2a3a55' }} />
+              <p style={{ fontSize: 12, color: '#475569', margin: 0 }}>
+                No results for <em>"{searchQuery}"</em>
+              </p>
               <button
-                onClick={() => {
-                  setSearchQuery('');
-                  setSelectedAssetClass('ALL');
-                  setSelectedExchange('ALL');
+                onClick={() => { setSearchQuery(''); setSelectedAssetClass('ALL'); setSelectedExchange('ALL'); }}
+                style={{
+                  padding: '6px 16px', fontSize: 10,
+                  background: '#0e1624', color: '#06b6d4',
+                  border: '1px solid #1e2a3d', cursor: 'pointer',
+                  fontFamily: '"JetBrains Mono", monospace', letterSpacing: '0.06em',
                 }}
-                className="mt-2 px-3 py-1 bg-[#1b202a] text-[#06b6d4] hover:text-[#dee2f1] border border-[#1b2232] text-xs transition-colors"
               >
-                Reset All Filters
+                Reset Filters
               </button>
             </div>
           ) : (
             filteredInstruments.map((inst, idx) => {
               const isHighlighted = idx === highlightedIndex;
-              const isActive = inst.symbol.toUpperCase() === activeSymbol.toUpperCase();
-
-              // Exchange color badges
-              const badgeColors: Record<Exchange, string> = {
-                NASDAQ: 'bg-cyan-950/60 text-cyan-400 border-cyan-800/60',
-                NYSE: 'bg-blue-950/60 text-blue-400 border-blue-800/60',
-                LSE: 'bg-amber-950/60 text-amber-400 border-amber-800/60',
-                EURONEXT: 'bg-purple-950/60 text-purple-400 border-purple-800/60',
-                XETRA: 'bg-emerald-950/60 text-emerald-400 border-emerald-800/60',
-                TSE: 'bg-rose-950/60 text-rose-400 border-rose-800/60',
-                HKEX: 'bg-orange-950/60 text-orange-400 border-orange-800/60',
-                NSE: 'bg-indigo-950/60 text-indigo-400 border-indigo-800/60',
-                CME: 'bg-teal-950/60 text-teal-400 border-teal-800/60',
-                FOREX: 'bg-emerald-950/60 text-emerald-400 border-emerald-800/60',
-                BINANCE: 'bg-yellow-950/60 text-yellow-400 border-yellow-800/60',
-              };
+              const isActive      = inst.symbol.toUpperCase() === activeSymbol.toUpperCase();
+              const badgeStyle    = EXCHANGE_BADGE_STYLES[inst.exchange] || { bg: '#1e2a3d', text: '#94a3b8', border: '#2a3a55' };
+              const acColor       = ASSET_CLASS_COLOR[inst.assetClass];
 
               return (
                 <div
                   key={inst.symbol}
                   onMouseEnter={() => setHighlightedIndex(idx)}
-                  onClick={() => {
-                    onSelectInstrument(inst.symbol);
-                    onClose();
+                  onClick={() => { onSelectInstrument(inst.symbol); onClose(); }}
+                  style={{
+                    display: 'flex', alignItems: 'center',
+                    padding: '11px 20px',
+                    cursor: 'pointer',
+                    borderLeft: isHighlighted ? '2px solid #06b6d4' : '2px solid transparent',
+                    backgroundColor: isHighlighted ? 'rgba(6,182,212,0.05)' : 'transparent',
+                    borderBottom: '1px solid #0e1624',
+                    transition: 'background 0.1s',
+                    gap: 0,
                   }}
-                  className={`px-4 py-2 flex items-center justify-between cursor-pointer transition-colors ${
-                    isHighlighted
-                      ? 'bg-[#141d2e] border-l-2 border-[#06b6d4]'
-                      : 'hover:bg-[#0d1424] border-l-2 border-transparent'
-                  }`}
                 >
-                  {/* Left: Ticker & Name */}
-                  <div className="flex items-center gap-3">
-                    <div className="flex flex-col">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-xs text-[#dee2f1]">{inst.symbol}</span>
-                        <span
-                          className={`text-[8.5px] font-bold px-1.5 py-0.2 border ${
-                            badgeColors[inst.exchange] || 'bg-[#1b202a] text-[#94a3b8] border-[#1b2232]'
-                          }`}
-                        >
-                          {inst.exchange}
+                  {/* Left col: symbol + name */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3, width: 180, flexShrink: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                      <span style={{
+                        fontSize: 12, fontWeight: 700, color: isHighlighted ? '#ffffff' : '#dee2f1',
+                        letterSpacing: '0.03em',
+                      }}>
+                        {inst.symbol}
+                      </span>
+                      {/* Exchange badge */}
+                      <span style={{
+                        fontSize: 8, fontWeight: 700, letterSpacing: '0.08em',
+                        padding: '2px 6px',
+                        background: badgeStyle.bg,
+                        color: badgeStyle.text,
+                        border: `1px solid ${badgeStyle.border}`,
+                      }}>
+                        {inst.exchange}
+                      </span>
+                      {isActive && (
+                        <span style={{
+                          fontSize: 8, fontWeight: 700,
+                          padding: '2px 6px',
+                          background: 'rgba(8,153,129,0.15)',
+                          color: '#089981',
+                          border: '1px solid rgba(8,153,129,0.35)',
+                        }}>
+                          LIVE
                         </span>
-                        {isActive && (
-                          <span className="text-[8px] bg-[#089981]/20 text-[#089981] border border-[#089981]/40 px-1 font-bold">
-                            ACTIVE
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[10px] text-[#94a3b8]">{inst.name}</span>
+                      )}
                     </div>
-                  </div>
-
-                  {/* Center: Sector & Asset Class */}
-                  <div className="hidden md:flex flex-col text-right">
-                    <span className="text-[10px] text-[#64748b]">{inst.sector}</span>
-                    <span className="text-[9px] text-[#475569]">
-                      {inst.region} · {inst.assetClass} · MktCap: {inst.marketCap}
+                    <span style={{ fontSize: 10, color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {inst.name}
                     </span>
                   </div>
 
-                  {/* Right: Price & Currency */}
-                  <div className="flex items-center gap-3">
-                    <div className="flex flex-col text-right">
-                      <span className="font-bold text-xs text-[#dee2f1]">
-                        {formatInstrumentPrice(inst.referencePrice, inst)}
+                  {/* Center col: sector + metadata */}
+                  <div style={{ flex: 1, padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <span style={{ fontSize: 10, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {inst.sector}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{
+                        fontSize: 8, fontWeight: 600, letterSpacing: '0.07em',
+                        padding: '1px 6px',
+                        background: `${acColor}12`,
+                        color: acColor,
+                        border: `1px solid ${acColor}28`,
+                      }}>
+                        {inst.assetClass}
                       </span>
-                      <span className="text-[9px] text-[#64748b]">{inst.currency}</span>
+                      <span style={{ fontSize: 9, color: '#334155' }}>{inst.region}</span>
+                      {inst.marketCap && inst.marketCap !== '—' && (
+                        <span style={{ fontSize: 9, color: '#334155' }}>MCap {inst.marketCap}</span>
+                      )}
                     </div>
+                  </div>
 
-                    <ArrowRight
+                  {/* Right col: price */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
+                    <div style={{ textAlign: 'right' }}>
+                      {(() => {
+                        const livePrice = livePrices.get(inst.symbol);
+                        const displayPrice = livePrice ?? inst.referencePrice;
+                        const isLiveData  = livePrice != null;
+                        return (
+                          <>
+                            <div style={{
+                              fontSize: 13, fontWeight: 700,
+                              color: isHighlighted ? '#ffffff' : (isLiveData ? '#dee2f1' : '#64748b'),
+                              letterSpacing: '0.02em',
+                            }}>
+                              {formatInstrumentPrice(displayPrice, inst)}
+                            </div>
+                            <div style={{ fontSize: 9, color: isLiveData ? '#089981' : '#334155', marginTop: 2 }}>
+                              {isLiveData ? '● LIVE' : inst.currency}
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                    <ChevronRight
                       size={14}
-                      className={`text-[#64748b] transition-transform ${
-                        isHighlighted ? 'translate-x-1 text-[#06b6d4]' : 'opacity-30'
-                      }`}
+                      style={{
+                        color: isHighlighted ? '#06b6d4' : '#1e2a3d',
+                        transform: isHighlighted ? 'translateX(2px)' : 'none',
+                        transition: 'all 0.15s',
+                        flexShrink: 0,
+                      }}
                     />
                   </div>
                 </div>
@@ -412,21 +549,32 @@ export const MarketDirectoryModal: React.FC<MarketDirectoryModalProps> = ({
           )}
         </div>
 
-        {/* 6. Modal Footer Bar */}
-        <div className="px-4 py-2 bg-[#0c121e] border-t border-[#1b2232] flex items-center justify-between text-[10px] text-[#64748b] shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="text-[#089981] font-bold">AETHER-CORE</span>
-            <span>· Institutional Global Venue Router</span>
+        {/* ── Footer ── */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '9px 20px',
+          background: 'linear-gradient(135deg, #060b12 0%, #070c14 100%)',
+          borderTop: '1px solid #1e2a3d',
+          flexShrink: 0,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Zap size={10} style={{ color: '#089981' }} />
+            <span style={{ fontSize: 9, color: '#089981', fontWeight: 700, letterSpacing: '0.08em' }}>AETHER-CORE</span>
+            <span style={{ fontSize: 9, color: '#2a3a55' }}>· Institutional Global Venue Router</span>
           </div>
-          <div className="flex items-center gap-3">
-            <span>
-              Direct WebSocket: <strong className="text-[#089981]">Binance</strong>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <span style={{ fontSize: 9, color: '#2a3a55', letterSpacing: '0.06em' }}>
+              CRYPTO: <strong style={{ color: '#facc15' }}>BINANCE LIVE WS</strong>
             </span>
-            <span>
-              DMA Feeds: <strong className="text-[#06b6d4]">NASDAQ / NYSE / LSE / CME / TSE / FX</strong>
+            <span style={{ fontSize: 9, color: '#2a3a55', letterSpacing: '0.06em' }}>
+              EQUITY / FX / CMDT: <strong style={{ color: '#06b6d4' }}>YAHOO FINANCE LIVE</strong>
+            </span>
+            <span style={{ fontSize: 9, color: '#2a3a55', letterSpacing: '0.06em' }}>
+              REFRESH: <strong style={{ color: '#94a3b8' }}>30s</strong>
             </span>
           </div>
         </div>
+
       </div>
     </div>
   );

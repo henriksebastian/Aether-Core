@@ -9,6 +9,15 @@ export default defineConfig({
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
+    proxy: {
+      // Yahoo Finance quote API — proxied to avoid CORS
+      '/api/yf': {
+        target: 'https://query1.finance.yahoo.com',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/api\/yf/, ''),
+      },
+    },
   },
   preview: {
     port: 5173,
@@ -24,3 +33,4 @@ export default defineConfig({
     exclude: ['@duckdb/duckdb-wasm'],
   },
 });
+
