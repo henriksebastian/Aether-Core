@@ -24,6 +24,12 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      - name: Extract package version
+        id: pkg
+        run: |
+          $ver = (Get-Content ./package.json -Raw | ConvertFrom-Json).version
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$ver"
+
       - name: Install dependencies
         run: npm install
 
@@ -41,10 +47,23 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Release Executable on Tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish Windows Executable to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          files: dist_electron/*.exe
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}-build.{1}', steps.pkg.outputs.version, github.run_number) }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || format('AETHER-CORE v{0} (Build #{1})', steps.pkg.outputs.version, github.run_number) }}
+          body: |
+            ## AETHER-CORE // Autonomous HFT Terminal
+            
+            Automated Windows release built from commit `${{ github.sha }}` on branch `${{ github.ref_name }}`.
+            
+            ### Included Executables:
+            - **`AETHER-CORE 1.0.0.exe`**: Portable standalone executable (runs immediately without installation)
+            - **`AETHER-CORE Setup 1.0.0.exe`**: Complete NSIS Windows installer
+          files: |
+            dist_electron/*.exe
+          generate_release_notes: true
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
