@@ -9,7 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "electron:dev": "electron .",
-    "dist:exe": "npm run build && electron-builder --win"
+    "dist:exe": "npm run build && electron-builder --win --publish never"
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "^1.29.0",
@@ -31,6 +31,7 @@
     "vite-plugin-pwa": "^1.3.0"
   },
   "build": {
+    "publish": null,
     "appId": "com.aethercore.terminal",
     "productName": "AETHER-CORE",
     "directories": {

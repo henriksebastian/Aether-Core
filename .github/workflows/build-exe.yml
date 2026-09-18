@@ -29,6 +29,8 @@ jobs:
 
       - name: Build Web Application & Windows Executable
         run: npm run dist:exe
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Windows Executable Artifacts
         uses: actions/upload-artifact@v4
